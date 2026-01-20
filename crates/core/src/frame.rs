@@ -1,0 +1,50 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum Frame {
+    Handshake(Handshake),
+    Heartbeat(Heartbeat),
+    Input(InputEvent),
+    Clipboard(ClipboardEvent),
+    FileTransferRequest(FileTransferRequest),
+    FileTransferResponse(FileTransferResponse),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileTransferRequest {
+    pub id: u32,
+    pub filename: String,
+    pub file_size: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileTransferResponse {
+    pub id: u32,
+    pub accepted: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum ClipboardEvent {
+    Text(String),
+    // Future: Image, Files
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Handshake {
+    pub version: u32,
+    pub client_id: String,
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Heartbeat {
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum InputEvent {
+    MouseMove { x: f32, y: f32 },
+    MouseButton { button_mask: u32, is_down: bool },
+    Keyboard { key_code: u32, is_down: bool },
+    Scroll { dx: f32, dy: f32 },
+}

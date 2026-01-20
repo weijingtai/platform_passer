@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Platform Passer</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+  <div class="container">
+    <h1>Platform Passer</h1>
+
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('client')">Client Mode</div>
+      <div class="tab" onclick="switchTab('server')">Server Mode</div>
+    </div>
+
+    <!-- Client View -->
+    <div id="client-view" class="view-content">
+      <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+        <label style="font-size: 0.85rem; color: var(--text-secondary);">Server IP Address</label>
+        <input type="text" id="server-ip" placeholder="e.g. 192.168.1.5" value="127.0.0.1" />
+      </div>
+
+      <button onclick="connect()">Connect to Server</button>
+
+      <div style="height: 1px; background: var(--border-color); margin: 0.5rem 0;"></div>
+
+      <button class="btn-secondary" onclick="sendFile()">
+        <span style="margin-right: 8px;">📁</span> Send File
+      </button>
+    </div>
+
+    <!-- Server View -->
+    <div id="server-view" class="view-content hidden">
+      <div style="text-align: center; padding: 1rem; color: var(--text-secondary);">
+        <p>Start the server to allow other devices to control this computer.</p>
+      </div>
+      <button onclick="startServer()">Start Server</button>
+    </div>
+
+    <!-- Status Log -->
+    <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+      <label
+        style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Status
+        Log</label>
+      <div class="status-box" id="status-log">Ready...</div>
+    </div>
+  </div>
+
+  <script>
+    const { invoke } = window.__TAURI__.tauri;
+    const { open } = window.__TAURI__.dialog;
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+      const activeTab = document.querySelector(`.tab[onclick="switchTab('${tab}')"]`);
+      if (activeTab) activeTab.classList.add('active');
+
+      if (tab === 'client') {
+        document.getElementById('client-view').classList.remove('hidden');
+        document.getElementById('server-view').classList.add('hidden');
+      } else {
+        document.getElementById('client-view').classList.add('hidden');
+        document.getElementById('server-view').classList.remove('hidden');
+      }
+    }
+
+    function log(msg) {
+      const el = document.getElementById('status-log');
+      el.innerText += `\n> ${msg}`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    async function connect() {
+      const ip = document.getElementById('server-ip').value;
+      log(`Connecting to ${ip}...`);
+      try {
+        const res = await invoke('connect_to', { ip });
+        log(res);
+      } catch (e) {
+        log(`Error: ${e}`);
+      }
+    }
+
+    async function startServer() {
+      log("Starting server...");
+      try {
+        const res = await invoke('start_server', { port: 4433 });
+        log(res);
+      } catch (e) {
+        log(`Error: ${e}`);
+      }
+    }
+
+    async function sendFile() {
+      try {
+        const selected = await open({ multiple: false, directory: false });
+        if (selected) {
+          log(`Queuing file: ${selected}`);
+          const res = await invoke('send_file_action', { path: selected });
+          log(res);
+        }
+      } catch (e) {
+        console.error(e);
+        log(`Error selecting file: ${e}`);
+      }
+    }
+
+    // Listen for backend events (optional, if we wired up window.emit)
+    // window.__TAURI__.event.listen('session-event', (event) => {
+    //   log(event.payload.message);
+    // });
+  </script>
+</body>
+
+</html>

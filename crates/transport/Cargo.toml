@@ -1,0 +1,13 @@
+[package]
+name = "platform-passer-transport"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+platform-passer-core = { path = "../core" }
+quinn = "0.10"
+rustls = { version = "0.21", features = ["dangerous_configuration"] }
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+tracing = "0.1"
+rcgen = "0.11"

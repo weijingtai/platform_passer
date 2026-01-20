@@ -1,0 +1,8 @@
+use anyhow::Result;
+
+pub trait ClipboardProvider {
+    fn get_text(&self) -> Result<String>;
+    fn set_text(&self, text: String) -> Result<()>;
+    // Callback is invoked when local clipboard changes
+    fn start_listener(&self, callback: Box<dyn Fn() + Send + Sync>) -> Result<()>;
+}

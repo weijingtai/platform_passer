@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/transport",
+    "crates/input",
+    "crates/clipboard",
+    "crates/session",
+    "apps/cli",
+    "apps/desktop/src-tauri",
+]
+
+
+resolver = "2"
