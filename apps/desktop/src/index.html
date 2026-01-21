@@ -184,9 +184,9 @@
       }
     }
 
-    // window.__TAURI__.event.listen('session-event', (event) => {
-    //   log(event.payload.message);
-    // });
+    window.__TAURI__.event.listen('session-event', (event) => {
+      log(event.payload.message);
+    });
 
     window.addEventListener('DOMContentLoaded', () => {
       // Small delay to ensure Tauri global is ready

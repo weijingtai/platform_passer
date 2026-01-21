@@ -102,7 +102,7 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
         // Event Forwarder Loop
         while let Some(event) = rx.recv().await {
             let _ = window.emit("session-event", Payload {
-                event_type: "Log".to_string(), 
+                event_type: format!("{:?}", event), 
                 message: match event {
                     SessionEvent::Log(s) => s,
                     SessionEvent::Connected(s) => format!("Connected to {}", s),

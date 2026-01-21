@@ -3,7 +3,7 @@ use crate::commands::SessionCommand;
 use anyhow::Result;
 use platform_passer_core::{Frame, InputEvent, ClipboardEvent, FileTransferRequest, FileTransferResponse, write_frame, read_frame};
 use platform_passer_transport::{make_client_endpoint};
-use platform_passer_input::{InputSource, DefaultInputSource};
+use platform_passer_input::{InputSink, DefaultInputSink};
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -21,6 +21,7 @@ pub async fn run_client_session(
 
     // 1. Setup QUIC Client
     let endpoint = make_client_endpoint("0.0.0.0:0".parse()?)?;
+    let _ = event_tx.send(SessionEvent::Log("Awaiting handshake...".into())).await;
     let connection = match endpoint.connect(server_addr, "localhost")?.await {
         Ok(c) => c,
         Err(e) => {
@@ -55,14 +56,9 @@ pub async fn run_client_session(
     // 3. Setup Channel for Mixed Events
     let (tx, mut rx) = mpsc::channel::<Frame>(100);
 
-    // 4. Start Capture
-    let source = DefaultInputSource::new();
-    let tx_clone = tx.clone();
-    source.start_capture(Box::new(move |event| {
-        let _ = tx_clone.blocking_send(Frame::Input(event));
-    }))?;
-
-    let _ = event_tx.send(SessionEvent::Log("Input capture started.".into())).await;
+    // 2. Setup Input Sink (Client receives inputs and injects them)
+    let sink = Arc::new(DefaultInputSink::new());
+    let _ = event_tx.send(SessionEvent::Log("Input sink ready.".into())).await;
     
     // 6. Start Clipboard Listener
     let clip = DefaultClipboard::new();
@@ -100,18 +96,14 @@ pub async fn run_client_session(
                 }
             }
             // Priority 3: Keepalive/Incoming? 
-            // We aren't reading from 'recv' here? 
-            // The Client is sending inputs. Does it receive anything?
-            // Clipboard updates? Yes!
-            // We need to read 'recv' too.
-             _ = read_frame_loop(&mut recv, &event_tx) => {
+            // We need to read 'recv' for inputs and clipboard
+             _ = read_frame_loop(&mut recv, &event_tx, sink.clone()) => {
                  // If this returns, stream closed or error
                  break;
              }
         }
     }
     
-    source.stop_capture()?;
     let _ = event_tx.send(SessionEvent::Disconnected).await;
     Ok(())
 }
@@ -158,9 +150,18 @@ async fn perform_file_send(
     Ok(())
 }
 
-async fn read_frame_loop(recv: &mut quinn::RecvStream, event_tx: &Sender<SessionEvent>) {
+async fn read_frame_loop(
+    recv: &mut quinn::RecvStream, 
+    event_tx: &Sender<SessionEvent>, 
+    sink: Arc<DefaultInputSink>
+) {
     loop {
          match read_frame(recv).await {
+             Ok(Some(Frame::Input(event))) => {
+                 if let Err(e) = sink.inject_event(event) {
+                     // log error
+                 }
+             }
              Ok(Some(Frame::Clipboard(ClipboardEvent::Text(text)))) => {
                  // We don't have local clipboard handle here easily without passing it down?
                  // Or we can just set it ourselves since we are in async context?
