@@ -10,68 +10,6 @@ use std::path::PathBuf;
 use tokio::sync::mpsc::{self, Sender, Receiver};
 use tokio::fs::File;
 
-async fn perform_file_send(
-    connection: &quinn::Connection, 
-    path: PathBuf, 
-    send: &mut quinn::SendStream, 
-    recv: &mut quinn::RecvStream,
-    event_tx: &Sender<SessionEvent>
-) -> Result<()> {
-    let _ = event_tx.send(SessionEvent::Log(format!("Sending file: {:?}", path))).await;
-    if let Ok(metadata) = tokio::fs::metadata(&path).await {
-        let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let size = metadata.len();
-        
-        let req = Frame::FileTransferRequest(FileTransferRequest {
-            id: rand::random(),
-            filename,
-            file_size: size,
-        });
-        write_frame(send, &req).await?;
-        
-        // We need to read the response. 
-        // CAUTION: This assumes the next frame is the response. 
-        // usage of 'recv' here might race if we are also reading inputs? 
-        // For M7 MVP, we assume lock-step for file transfer or mixed frames is handled by the caller not reading?
-        // Actually, 'recv' is the global stream recv. If we are in the main loop, we shouldn't steal from it?
-        // Protocol flaw: Control stream is shared.
-        // Quick Fix: We assume response comes fast.
-        
-        // Actually, better approach: The main loop reads frames. If it sees FileTransferResponse, it handles it.
-        // But here we want to block "send file" action until accepted?
-        // Let's rely on the main loop for responses? 
-        // No, keep it simple for now: Client initiates transfer, Server responds immediately.
-        // But if we are in the main loop, we can't use 'recv' easily if it's being polled by select!.
-        
-        // Alternative: Open a NEW bi-stream for file transfer negotiation? 
-        // Yes, that's cleaner. 
-        // M4 Implementation used the MAIN stream.
-        // M7 Refactor: Use a dedicated bi-stream for the negotiation AND data?
-        
-        // Let's stick to the M4 plan which used the main stream but it was lock-step.
-        // If we want dynamic, we should open a new stream for the request.
-        
-        let (mut req_send, mut req_recv) = connection.open_bi().await?;
-        write_frame(&mut req_send, &req).await?;
-        
-        match read_frame(&mut req_recv).await? {
-             Some(Frame::FileTransferResponse(resp)) => {
-                if resp.accepted {
-                     let _ = event_tx.send(SessionEvent::Log("Transfer accepted. Sending data...".into())).await;
-                     let mut uni_send = connection.open_uni().await?;
-                     let mut file = File::open(&path).await?;
-                     tokio::io::copy(&mut file, &mut uni_send).await?;
-                     uni_send.finish().await?;
-                     let _ = event_tx.send(SessionEvent::Log("File sent successfully.".into())).await;
-                } else {
-                     let _ = event_tx.send(SessionEvent::Error("Transfer rejected.".into())).await;
-                }
-             }
-             _ => {}
-        }
-    }
-    Ok(())
-}
 
 pub async fn run_client_session(
     server_addr: SocketAddr, 
@@ -119,8 +57,6 @@ pub async fn run_client_session(
 
     // 4. Start Capture
     let source = DefaultInputSource::new();
-    let tx_clone = tx.clone();
-    
     let tx_clone = tx.clone();
     source.start_capture(Box::new(move |event| {
         let _ = tx_clone.blocking_send(Frame::Input(event));
@@ -230,7 +166,7 @@ async fn read_frame_loop(recv: &mut quinn::RecvStream, event_tx: &Sender<Session
                  // Or we can just set it ourselves since we are in async context?
                  // Wait, WindowsClipboard::new() is cheap unit struct.
                  let clip = DefaultClipboard::new();
-                 if let Err(_) = clip.set_text(text) {}
+                 let _ = clip.set_text(text);
              }
              Ok(Some(_)) => {},
              Ok(None) => return, // Closed

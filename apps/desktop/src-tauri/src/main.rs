@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::{command, Window, State};
+use tauri::{command, WebviewWindow, State, Emitter};
 use platform_passer_session::{run_client_session, run_server_session, SessionEvent, SessionCommand};
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
@@ -32,7 +32,7 @@ fn send_file_action(path: String, state: State<AppState>) -> String {
 }
 
 #[command]
-fn start_server(port: u16, window: Window, state: State<AppState>) -> String {
+fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppState>) -> String {
     let mut running = state.running.lock().unwrap();
     if *running {
         return "Session already running".to_string();
@@ -47,7 +47,7 @@ fn start_server(port: u16, window: Window, state: State<AppState>) -> String {
     // Spawn async task
     tauri::async_runtime::spawn(async move {
         let (tx, mut rx) = mpsc::channel(100);
-        let bind_addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
+        let bind_addr: SocketAddr = format!("{}:{}", ip, port).parse().unwrap_or_else(|_| "0.0.0.0:4433".parse().unwrap());
         
         let session_task = tokio::spawn(async move {
             run_server_session(bind_addr, tx).await
@@ -73,7 +73,7 @@ fn start_server(port: u16, window: Window, state: State<AppState>) -> String {
 }
 
 #[command]
-fn connect_to(ip: String, window: Window, state: State<AppState>) -> String {
+fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppState>) -> String {
     let mut running = state.running.lock().unwrap();
     if *running {
         return "Session already running".to_string();
@@ -87,10 +87,11 @@ fn connect_to(ip: String, window: Window, state: State<AppState>) -> String {
     let running_clone = state.running.clone();
     let tx_clone = state.command_tx.clone();
 
+    let ip_clone = ip.clone();
     tauri::async_runtime::spawn(async move {
         let (tx, mut rx) = mpsc::channel(100);
         
-        let server_addr: SocketAddr = format!("{}:4433", ip).parse().unwrap_or_else(|_| "127.0.0.1:4433".parse().unwrap());
+        let server_addr: SocketAddr = format!("{}:{}", ip_clone, port).parse().unwrap_or_else(|_| "127.0.0.1:4433".parse().unwrap());
         
         let session_task = tokio::spawn(async move {
             run_client_session(server_addr, None, cmd_rx, tx).await
@@ -115,6 +116,18 @@ fn connect_to(ip: String, window: Window, state: State<AppState>) -> String {
     format!("Connecting to {}...", ip)
 }
 
+#[command]
+fn check_accessibility() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        platform_passer_input::macos::utils::is_accessibility_trusted()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
 #[derive(serde::Serialize, Clone)]
 struct Payload {
     event_type: String,
@@ -129,7 +142,8 @@ fn main() {
             running: Arc::new(Mutex::new(false)),
             command_tx: Arc::new(Mutex::new(None)),
         })
-        .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action, check_accessibility])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

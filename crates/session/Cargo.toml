@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 tokio = { version = "1.0", features = ["full"] }
+rand = "0.8"
 tracing = "0.1"
 platform-passer-core = { path = "../core" }
 platform-passer-transport = { path = "../transport" }

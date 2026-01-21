@@ -1,8 +1,8 @@
 use crate::ClipboardProvider;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSString, NSAutoreleasePool};
-use objc::{msg_send, sel, sel_impl, runtime::Object};
+use objc::{msg_send, sel, sel_impl};
 
 pub struct MacosClipboard;
 
@@ -17,13 +17,13 @@ impl ClipboardProvider for MacosClipboard {
         unsafe {
             let _pool = NSAutoreleasePool::new(nil);
             let ns_pasteboard: id = msg_send![objc::class!(NSPasteboard), generalPasteboard];
-            let ns_string: id = msg_send![ns_pasteboard, stringForType: cocoa::foundation::NSPasteboardTypeString];
+            let ns_string: id = msg_send![ns_pasteboard, stringForType: cocoa::appkit::NSPasteboardTypeString];
             
             if ns_string == nil {
                 return Ok(String::new());
             }
             
-            let char_ptr: *const libc::c_char = msg_send![ns_string, UTF8String];
+            let char_ptr: *const std::os::raw::c_char = msg_send![ns_string, UTF8String];
             let c_str = std::ffi::CStr::from_ptr(char_ptr);
             Ok(c_str.to_string_lossy().into_owned())
         }
@@ -36,7 +36,7 @@ impl ClipboardProvider for MacosClipboard {
             let ns_string = NSString::alloc(nil).init_str(&text);
             
             let _: () = msg_send![ns_pasteboard, clearContents];
-            let _: bool = msg_send![ns_pasteboard, setString:ns_string forType: cocoa::foundation::NSPasteboardTypeString];
+            let _: bool = msg_send![ns_pasteboard, setString:ns_string forType: cocoa::appkit::NSPasteboardTypeString];
             Ok(())
         }
     }

@@ -22,9 +22,15 @@
 
     <!-- Client View -->
     <div id="client-view" class="view-content">
-      <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-        <label style="font-size: 0.85rem; color: var(--text-secondary);">Server IP Address</label>
-        <input type="text" id="server-ip" placeholder="e.g. 192.168.1.5" value="127.0.0.1" />
+      <div style="display: flex; gap: 0.5rem;">
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 2;">
+          <label style="font-size: 0.85rem; color: var(--text-secondary);">Server IP</label>
+          <input type="text" id="server-ip" placeholder="e.g. 192.168.1.5" value="127.0.0.1" />
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">
+          <label style="font-size: 0.85rem; color: var(--text-secondary);">Port</label>
+          <input type="number" id="server-port" value="4433" />
+        </div>
       </div>
 
       <button onclick="connect()">Connect to Server</button>
@@ -38,8 +44,20 @@
 
     <!-- Server View -->
     <div id="server-view" class="view-content hidden">
-      <div style="text-align: center; padding: 1rem; color: var(--text-secondary);">
-        <p>Start the server to allow other devices to control this computer.</p>
+      <div id="accessibility-warning" class="hidden"
+        style="background: rgba(255, 107, 107, 0.1); border: 1px solid var(--accent-color); color: var(--accent-color); padding: 0.75rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.85rem;">
+        ⚠️ <strong>Accessibility Permissions Missing:</strong> Input injection requires permission. Please go to
+        <em>System Settings > Privacy & Security > Accessibility</em> and enable this app.
+      </div>
+      <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 2;">
+          <label style="font-size: 0.85rem; color: var(--text-secondary);">Bind IP</label>
+          <input type="text" id="bind-ip" value="0.0.0.0" />
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">
+          <label style="font-size: 0.85rem; color: var(--text-secondary);">Bind Port</label>
+          <input type="number" id="bind-port" value="4433" />
+        </div>
       </div>
       <button onclick="startServer()">Start Server</button>
     </div>
@@ -54,12 +72,27 @@
   </div>
 
   <script>
-    const { invoke } = window.__TAURI__.tauri;
-    const { open } = window.__TAURI__.dialog;
+    // In Tauri v2, most APIs are moved to core or plugins
+    // If using withGlobalTauri: true
+    let invoke;
+    let openDialog;
 
-    function switchTab(tab) {
+    try {
+      if (window.__TAURI__) {
+        invoke = window.__TAURI__.core.invoke;
+        // Dialog plugin might need to be accessed differently if not exported to global
+        // But usually it's window.__TAURI__.dialog
+        openDialog = window.__TAURI__.dialog.open;
+      } else {
+        console.error("Tauri global not found. Ensure withGlobalTauri: true is set in tauri.conf.json");
+      }
+    } catch (e) {
+      console.error("Error initializing Tauri APIs:", e);
+    }
+
+    async function switchTab(tab) {
       document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-      const activeTab = document.querySelector(`.tab[onclick="switchTab('${tab}')"]`);
+      const activeTab = document.querySelector(`.tab[onclick*="switchTab('${tab}')"]`);
       if (activeTab) activeTab.classList.add('active');
 
       if (tab === 'client') {
@@ -68,6 +101,17 @@
       } else {
         document.getElementById('client-view').classList.add('hidden');
         document.getElementById('server-view').classList.remove('hidden');
+
+        // Check accessibility permissions
+        if (invoke) {
+          const isTrusted = await invoke('check_accessibility');
+          const warning = document.getElementById('accessibility-warning');
+          if (isTrusted) {
+            warning.classList.add('hidden');
+          } else {
+            warning.classList.remove('hidden');
+          }
+        }
       }
     }
 
@@ -79,9 +123,14 @@
 
     async function connect() {
       const ip = document.getElementById('server-ip').value;
-      log(`Connecting to ${ip}...`);
+      const port = parseInt(document.getElementById('server-port').value);
+      log(`Connecting to ${ip}:${port}...`);
+      if (!invoke) {
+        log("Error: Tauri API 'invoke' not initialized");
+        return;
+      }
       try {
-        const res = await invoke('connect_to', { ip });
+        const res = await invoke('connect_to', { ip, port });
         log(res);
       } catch (e) {
         log(`Error: ${e}`);
@@ -89,9 +138,15 @@
     }
 
     async function startServer() {
-      log("Starting server...");
+      const ip = document.getElementById('bind-ip').value;
+      const port = parseInt(document.getElementById('bind-port').value);
+      log(`Starting server on ${ip}:${port}...`);
+      if (!invoke) {
+        log("Error: Tauri API 'invoke' not initialized");
+        return;
+      }
       try {
-        const res = await invoke('start_server', { port: 4433 });
+        const res = await invoke('start_server', { ip, port });
         log(res);
       } catch (e) {
         log(`Error: ${e}`);
@@ -99,10 +154,18 @@
     }
 
     async function sendFile() {
+      if (!openDialog) {
+        log("Error: Tauri API 'dialog' not initialized. Make sure the plugin is installed and enabled.");
+        return;
+      }
       try {
-        const selected = await open({ multiple: false, directory: false });
+        const selected = await openDialog({ multiple: false, directory: false });
         if (selected) {
           log(`Queuing file: ${selected}`);
+          if (!invoke) {
+            log("Error: invoke not initialized");
+            return;
+          }
           const res = await invoke('send_file_action', { path: selected });
           log(res);
         }
@@ -112,10 +175,14 @@
       }
     }
 
-    // Listen for backend events (optional, if we wired up window.emit)
     // window.__TAURI__.event.listen('session-event', (event) => {
     //   log(event.payload.message);
     // });
+
+    window.addEventListener('DOMContentLoaded', () => {
+      // Small delay to ensure Tauri global is ready
+      setTimeout(() => switchTab('client'), 500);
+    });
   </script>
 </body>
 

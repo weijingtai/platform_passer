@@ -1,11 +1,6 @@
-use cocoa::base::id;
-use objc::{msg_send, sel, sel_impl};
-
 /// Checks if the current process has accessibility permissions.
 pub fn is_accessibility_trusted() -> bool {
     unsafe {
-        // CoreGraphics/ApplicationServices AXIsProcessTrusted()
-        // We can use the C-API directly if we link it.
         extern "C" {
             fn AXIsProcessTrusted() -> bool;
         }

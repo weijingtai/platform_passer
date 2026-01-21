@@ -4,21 +4,22 @@ version = "0.1.0"
 edition = "2021"
 
 [build-dependencies]
-tauri-build = { version = "1.5", features = [] }
+tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "1.5", features = ["shell-open"] }
+tauri = { version = "2.0", features = [] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-platform-passer-core = { path = "../../crates/core" }
-platform-passer-transport = { path = "../../crates/transport" }
-platform-passer-input = { path = "../../crates/input" }
-platform-passer-clipboard = { path = "../../crates/clipboard" }
-platform-passer-session = { path = "../../crates/session" }
+platform-passer-core = { path = "../../../crates/core" }
+platform-passer-transport = { path = "../../../crates/transport" }
+platform-passer-input = { path = "../../../crates/input" }
+platform-passer-clipboard = { path = "../../../crates/clipboard" }
+platform-passer-session = { path = "../../../crates/session" }
 tokio = { version = "1.0", features = ["full"] }
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+tauri-plugin-dialog = "2.0"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

@@ -1,35 +1,14 @@
 {
+  "productName": "platform-passer",
+  "version": "0.1.0",
+  "identifier": "com.platform-passer.dev",
   "build": {
     "beforeDevCommand": "",
     "beforeBuildCommand": "",
-    "devPath": "../src",
-    "distDir": "../src",
-    "withGlobalTauri": true
+    "devUrl": null,
+    "frontendDist": "../src"
   },
-  "package": {
-    "productName": "platform-passer",
-    "version": "0.1.0"
-  },
-  "tauri": {
-    "allowlist": {
-      "all": false,
-      "shell": {
-        "all": false,
-        "open": true
-      }
-    },
-    "bundle": {
-      "active": true,
-      "targets": "all",
-      "identifier": "com.platform-passer.dev",
-      "icon": [
-        "icons/32x32.png",
-        "icons/128x128.png"
-      ]
-    },
-    "security": {
-      "csp": null
-    },
+  "app": {
     "windows": [
       {
         "fullscreen": false,
@@ -38,6 +17,10 @@
         "width": 800,
         "height": 600
       }
-    ]
+    ],
+    "security": {
+      "csp": null
+    },
+    "withGlobalTauri": true
   }
 }

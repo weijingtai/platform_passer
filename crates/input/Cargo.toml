@@ -16,7 +16,8 @@ windows = { version = "0.52", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.23"
-core-foundation = "0.9"
+core-graphics = "0.24"
+core-foundation = "0.10"
 cocoa = "0.25"
 libc = "0.2"
+objc = "0.2"
