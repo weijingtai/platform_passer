@@ -18,3 +18,8 @@ target/
 .vscode/
 *.swp
 *.swo
+
+# Tauri v2
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/build_output.txt
+**/*.log
