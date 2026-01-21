@@ -25,15 +25,15 @@
       <div style="display: flex; gap: 0.5rem;">
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 2;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Server IP</label>
-          <input type="text" id="server-ip" placeholder="e.g. 192.168.1.5" value="127.0.0.1" />
+          <input type="text" id="server-ip" placeholder="Target IP" value="127.0.0.1" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Port</label>
-          <input type="number" id="server-port" value="4433" />
+          <input type="number" id="server-port" value="4433" placeholder="4433" />
         </div>
       </div>
 
-      <button onclick="connect()">Connect to Server</button>
+      <button onclick="connect()" style="margin-top: 1rem;">Connect to Server</button>
 
       <div style="height: 1px; background: var(--border-color); margin: 0.5rem 0;"></div>
 
@@ -52,13 +52,14 @@
       <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 2;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Bind IP</label>
-          <input type="text" id="bind-ip" value="0.0.0.0" />
+          <input type="text" id="bind-ip" value="0.0.0.0" placeholder="0.0.0.0" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Bind Port</label>
-          <input type="number" id="bind-port" value="4433" />
+          <input type="number" id="bind-port" value="4433" placeholder="4433" />
         </div>
       </div>
+
       <button onclick="startServer()">Start Server</button>
     </div>
 
@@ -82,7 +83,9 @@
         invoke = window.__TAURI__.core.invoke;
         // Dialog plugin might need to be accessed differently if not exported to global
         // But usually it's window.__TAURI__.dialog
-        openDialog = window.__TAURI__.dialog.open;
+        if (window.__TAURI__.dialog) {
+          openDialog = window.__TAURI__.dialog.open;
+        }
       } else {
         console.error("Tauri global not found. Ensure withGlobalTauri: true is set in tauri.conf.json");
       }
@@ -104,13 +107,15 @@
 
         // Check accessibility permissions
         if (invoke) {
-          const isTrusted = await invoke('check_accessibility');
-          const warning = document.getElementById('accessibility-warning');
-          if (isTrusted) {
-            warning.classList.add('hidden');
-          } else {
-            warning.classList.remove('hidden');
-          }
+          try {
+            const isTrusted = await invoke('check_accessibility');
+            const warning = document.getElementById('accessibility-warning');
+            if (isTrusted) {
+              warning.classList.add('hidden');
+            } else {
+              warning.classList.remove('hidden');
+            }
+          } catch (e) { console.error("Accessibility check failed", e); }
         }
       }
     }
@@ -123,7 +128,9 @@
 
     async function connect() {
       const ip = document.getElementById('server-ip').value;
-      const port = parseInt(document.getElementById('server-port').value);
+      const portStr = document.getElementById('server-port').value;
+      const port = parseInt(portStr) || 4433;
+
       log(`Connecting to ${ip}:${port}...`);
       if (!invoke) {
         log("Error: Tauri API 'invoke' not initialized");
@@ -139,7 +146,9 @@
 
     async function startServer() {
       const ip = document.getElementById('bind-ip').value;
-      const port = parseInt(document.getElementById('bind-port').value);
+      const portStr = document.getElementById('bind-port').value;
+      const port = parseInt(portStr) || 4433;
+
       log(`Starting server on ${ip}:${port}...`);
       if (!invoke) {
         log("Error: Tauri API 'invoke' not initialized");

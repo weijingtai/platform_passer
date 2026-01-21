@@ -35,7 +35,6 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-    match cli.command {
         Commands::Server { bind } => run_server(bind).await,
         Commands::Client { server, send_file } => run_client(server, send_file).await,
     }

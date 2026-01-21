@@ -9,6 +9,11 @@
     "frontendDist": "../src"
   },
   "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null,
+      "capabilities": []
+    },
     "windows": [
       {
         "fullscreen": false,
@@ -17,10 +22,14 @@
         "width": 800,
         "height": 600
       }
-    ],
-    "security": {
-      "csp": null
-    },
-    "withGlobalTauri": true
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png"
+    ]
   }
 }

@@ -12,4 +12,5 @@ platform-passer-core = { path = "../core" }
 platform-passer-transport = { path = "../transport" }
 platform-passer-input = { path = "../input" }
 platform-passer-clipboard = { path = "../clipboard" }
-quinn = "0.10" # Ensure version match or use wildcards if acceptable for dev
+quinn = "0.10"
+rand = "0.8"

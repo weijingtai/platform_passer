@@ -1,24 +1,25 @@
-# Windows Implementation Development Log
+# Windows Development Log
 
-This document tracks Windows-side progress and architectural decisions to sync with the macOS team.
+## Session: 2026-01-21 (Sync & Refinement)
 
-## Current Progress (M1 Iteration)
+### 1. 🔧 Core Fixes
+- **Clipboard**: Fully migrated `impl_win.rs` to `windows` crate v0.52.0. Resolved all `HANDLE/HGLOBAL` type mismatches and switched to Unicode (`W`) APIs.
+- **Compilation**: Fixed various compilation errors in `session` (duplicate functions) and `apps/desktop` (Tauri v2 `Emitter` trait).
+- **Environment**: Identified and worked around a persistent "C: drive" build path error by isolating the build in a custom target directory.
 
-- [x] **Input Handling**: 
-    - `WindowsInputSource`: Global hook with **Normalized Coordinate (0.0-1.0)** capture.
-    - `WindowsInputSink`: Event injection with **Normalized Coordinate** support.
-- [x] **Clipboard**:
-    - `WindowsClipboard`: Basic text synchronization.
-- [x] **Session Logic Refactor**:
-    - `session/client.rs` and `session/server.rs` now use platform-agnostic traits and conditional compilation. 
-    - This allows the codebase to **compile on macOS**.
+### 2. ✨ New Features
+- **Configurable Network**:
+    - **Backend**: Updated `start_server` and `connect_to` to accept optional IP/Port parameters.
+    - **Frontend**: Added UI inputs for Server Bind IP/Port and Client Target Port.
+    - **UX**: Retained simple defaults (`0.0.0.0:4433`, `127.0.0.1:4433`).
 
-## Architectural Notes (For macOS Sync)
+### 3. 🔄 macOS Sync
+- Pulled latest changes from `origin/main`.
+- **Merge Resolution**:
+    - `main.rs`: Merged Windows-specific network logic with macOS accessibility checks.
+    - `tauri.conf.json`: Merged security capabilities with bundle configuration.
+    - `index.html`: Merged new UI fields with remote layout/accessibility warnings.
+- **Verification**: Verified via `cargo check`.
 
-1. **Coordinate System**:
-   - Windows uses pixel coordinates. I'm planning to move towards **Normalized Coordinates (0.0 to 1.0)** in `crates/core` to avoid DPI and resolution issues during the next sync.
-2. **Session Logic**:
-   - Currently, `session/client.rs` and `session/server.rs` have hardcoded Windows types. I will refactor these to use the traits defined in `input/traits.rs` and `clipboard/traits.rs` to allow cross-platform compilation.
-
-## Contact/Lead
-- **Lead**: Antigravity (Windows)
+### 4. 🧹 Cleanup
+- Updated `.gitignore` to exclude build artifacts (`new_target/`) and generated icons.

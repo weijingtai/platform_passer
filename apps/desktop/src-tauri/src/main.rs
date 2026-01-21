@@ -91,7 +91,9 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
     tauri::async_runtime::spawn(async move {
         let (tx, mut rx) = mpsc::channel(100);
         
-        let server_addr: SocketAddr = format!("{}:{}", ip_clone, port).parse().unwrap_or_else(|_| "127.0.0.1:4433".parse().unwrap());
+        // Handle IPv6 brackets if needed, or simple concatenation
+        let server_addr_str = format!("{}:{}", ip_clone, port);
+        let server_addr: SocketAddr = server_addr_str.parse().unwrap_or_else(|_| "127.0.0.1:4433".parse().unwrap());
         
         let session_task = tokio::spawn(async move {
             run_client_session(server_addr, None, cmd_rx, tx).await
@@ -113,7 +115,7 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
         *tx_clone.lock().unwrap() = None;
     });
 
-    format!("Connecting to {}...", ip)
+    format!("Connecting to {}:{}...", ip, port)
 }
 
 #[command]

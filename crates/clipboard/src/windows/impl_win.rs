@@ -1,26 +1,25 @@
-use crate::trait_def::ClipboardProvider;
-use anyhow::{Result, anyhow, Context};
+use crate::traits::ClipboardProvider;
+use anyhow::{Result, anyhow};
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, Once};
 use std::thread;
-use windows::core::{PCSTR, s};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM, HANDLE, GlobalLock, GlobalUnlock, GlobalFree};
+use windows::core::{PCWSTR, w, HRESULT};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM, HANDLE, HGLOBAL, HINSTANCE, HMODULE, GlobalFree};
 use windows::Win32::System::DataExchange::{
     OpenClipboard, CloseClipboard, EmptyClipboard, SetClipboardData, GetClipboardData,
-    AddClipboardFormatListener, RemoveClipboardFormatListener, CF_TEXT,
+    AddClipboardFormatListener, RemoveClipboardFormatListener,
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GMEM_MOVEABLE, GMEM_DDESHARE};
-use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExA, DefWindowProcA, DispatchMessageA, GetMessageA, RegisterClassA,
-    CS_DBLCLKS, MSG, WNDCLASSA, WS_OVERLAPPEDWINDOW, WM_CLIPBOARDUPDATE, WM_DESTROY,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
+    CS_DBLCLKS, MSG, WNDCLASSW, WS_OVERLAPPEDWINDOW, WM_CLIPBOARDUPDATE, WM_DESTROY,
+    HMENU, WINDOW_EX_STYLE,
 };
 
-// Re-export trait for internal use if needed, or just use crate::traits
-use crate::traits::ClipboardProvider as ClipboardTrait;
+const CF_UNICODETEXT: u32 = 13;
 
 static REGISTER_CLASS: Once = Once::new();
-static WINDOW_CLASS_NAME: PCSTR = s!("PlatformPasserClipboardListener");
 static GLOBAL_CALLBACK: Mutex<Option<Box<dyn Fn() + Send + Sync>>> = Mutex::new(None);
 
 pub struct WindowsClipboard;
@@ -31,79 +30,77 @@ impl WindowsClipboard {
     }
 }
 
-impl ClipboardTrait for WindowsClipboard {
+impl ClipboardProvider for WindowsClipboard {
     fn get_text(&self) -> Result<String> {
         unsafe {
-            if !OpenClipboard(HWND(0)).as_bool() {
-                return Err(anyhow!("Failed to open clipboard"));
-            }
+            OpenClipboard(HWND(0)).map_err(|e| anyhow!("Failed to open clipboard: {}", e))?;
             
-            // Defers CloseClipboard
             struct Closer;
             impl Drop for Closer {
-                fn drop(&mut self) { unsafe { CloseClipboard(); } }
+                fn drop(&mut self) { unsafe { let _ = CloseClipboard(); } }
             }
             let _closer = Closer;
 
-            let handle = GetClipboardData(CF_TEXT.0);
+            let handle = GetClipboardData(CF_UNICODETEXT).map_err(|e| anyhow!("GetClipboardData failed: {}", e))?;
             if handle.is_invalid() {
-                // Not text or empty
                 return Ok(String::new());
             }
 
-            let ptr = GlobalLock(handle);
+            let hglobal = HGLOBAL(handle.0 as *mut _);
+            let ptr = GlobalLock(hglobal);
             if ptr.is_null() {
                 return Err(anyhow!("GlobalLock failed"));
             }
 
-            let c_str = std::ffi::CStr::from_ptr(ptr as *const i8);
-            let s = c_str.to_string_lossy().into_owned();
+            let mut len = 0;
+            let ptr_u16 = ptr as *const u16;
+            while *ptr_u16.add(len) != 0 {
+                len += 1;
+            }
+            let slice = std::slice::from_raw_parts(ptr_u16, len);
+            let s = String::from_utf16_lossy(slice);
             
-            GlobalUnlock(handle);
+            let _ = GlobalUnlock(hglobal).is_ok();
             Ok(s)
         }
     }
 
     fn set_text(&self, text: String) -> Result<()> {
         unsafe {
-            if !OpenClipboard(HWND(0)).as_bool() {
-                return Err(anyhow!("Failed to open clipboard"));
-            }
+            OpenClipboard(HWND(0)).map_err(|e| anyhow!("Failed to open clipboard: {}", e))?;
             
-             struct Closer;
+            struct Closer;
             impl Drop for Closer {
-                fn drop(&mut self) { unsafe { CloseClipboard(); } }
+                fn drop(&mut self) { unsafe { let _ = CloseClipboard(); } }
             }
             let _closer = Closer;
 
-            EmptyClipboard();
+            EmptyClipboard().map_err(|e| anyhow!("EmptyClipboard failed: {}", e))?;
 
-            // Allocate global memory
-            // +1 for null terminator
-            let len = text.len() + 1;
-            let handle = GlobalAlloc(GMEM_MOVEABLE, len);
-            if handle.is_invalid() {
-                return Err(anyhow!("GlobalAlloc failed"));
+            let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let size = utf16.len() * 2;
+            
+            let hglobal = GlobalAlloc(GMEM_MOVEABLE, size).map_err(|e| anyhow!("GlobalAlloc failed: {}", e))?;
+            if hglobal.is_invalid() {
+                return Err(anyhow!("GlobalAlloc returned invalid handle"));
             }
 
-            let ptr = GlobalLock(handle);
+            let ptr = GlobalLock(hglobal);
             if ptr.is_null() {
-                GlobalFree(handle);
+                let _ = GlobalFree(hglobal);
                 return Err(anyhow!("GlobalLock failed"));
             }
 
-            // Copy data
-            std::ptr::copy_nonoverlapping(text.as_ptr(), ptr as *mut u8, text.len());
-            *(ptr as *mut u8).add(text.len()) = 0;
+            std::ptr::copy_nonoverlapping(utf16.as_ptr(), ptr as *mut u16, utf16.len());
 
-            GlobalUnlock(handle);
+            let _ = GlobalUnlock(hglobal).is_ok();
 
-            if SetClipboardData(CF_TEXT.0, handle).is_invalid() {
-                GlobalFree(handle);
-                return Err(anyhow!("SetClipboardData failed"));
+            let handle = HANDLE(hglobal.0 as isize);
+            if let Err(e) = SetClipboardData(CF_UNICODETEXT, handle) {
+                let _ = GlobalFree(hglobal);
+                return Err(anyhow!("SetClipboardData failed: {}", e));
             }
             
-            // System now owns the memory
             Ok(())
         }
     }
@@ -115,31 +112,34 @@ impl ClipboardTrait for WindowsClipboard {
         }
 
         thread::spawn(|| unsafe {
-            let h_instance = GetModuleHandleA(None).unwrap();
+            let h_module = GetModuleHandleW(None).unwrap_or(HMODULE(0));
+            let h_instance = HINSTANCE(h_module.0);
+            let window_class_name = w!("PlatformPasserClipboardListener");
             
             REGISTER_CLASS.call_once(|| {
-                let wc = WNDCLASSA {
+                let wc = WNDCLASSW {
                     hCursor: Default::default(),
                     hIcon: Default::default(),
-                    lpszMenuName: PCSTR::null(),
-                    lpszClassName: WINDOW_CLASS_NAME,
+                    lpszMenuName: PCWSTR::null(),
+                    lpszClassName: window_class_name,
                     lpfnWndProc: Some(wnd_proc),
                     hInstance: h_instance,
                     style: CS_DBLCLKS,
                     ..Default::default()
                 };
-                RegisterClassA(&wc);
+                let _ = RegisterClassW(&wc);
             });
 
-            // Create message-only window (HWND_MESSAGE = -3 as pointer is not easy here, use Parent=0 for now invisible)
-            let hwnd = CreateWindowExA(
-                Default::default(),
-                WINDOW_CLASS_NAME,
-                s!("ClipboardListener"),
+            // Create message-only window
+            let title = w!("ClipboardListener");
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                window_class_name,
+                title,
                 WS_OVERLAPPEDWINDOW,
                 0, 0, 0, 0,
                 HWND(0),
-                Default::default(),
+                HMENU(0),
                 h_instance,
                 None,
             );
@@ -148,14 +148,14 @@ impl ClipboardTrait for WindowsClipboard {
                 return;
             }
 
-            AddClipboardFormatListener(hwnd);
+            let _ = AddClipboardFormatListener(hwnd);
 
             let mut msg = MSG::default();
-            while GetMessageA(&mut msg, HWND(0), 0, 0).into() {
-                DispatchMessageA(&msg);
+            while GetMessageW(&mut msg, HWND(0), 0, 0).into() {
+                let _ = DispatchMessageW(&msg);
             }
             
-            RemoveClipboardFormatListener(hwnd);
+            let _ = RemoveClipboardFormatListener(hwnd);
         });
         
         Ok(())
@@ -167,9 +167,6 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_CLIPBOARDUPDATE => {
             if let Ok(guard) = GLOBAL_CALLBACK.lock() {
                 if let Some(cb) = &*guard {
-                    // Logic to avoid loop feedback? 
-                    // For now, naive implementation: just notify.
-                    // Verification phase will handle "don't re-send what we just received".
                     cb();
                 }
             }
@@ -179,6 +176,6 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
             LRESULT(0)
         }
-        _ => DefWindowProcA(hwnd, msg, wparam, lparam),
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }

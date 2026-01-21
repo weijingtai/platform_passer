@@ -23,3 +23,9 @@ target/
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/build_output.txt
 **/*.log
+
+# Debugging & Custom Build Artifacts
+new_target/
+*.txt
+apps/desktop/src-tauri/icons/
+app-icon.png
