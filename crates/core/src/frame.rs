@@ -43,6 +43,7 @@ pub struct Heartbeat {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum InputEvent {
+    /// Normalized coordinates from 0.0 to 1.0
     MouseMove { x: f32, y: f32 },
     MouseButton { button_mask: u32, is_down: bool },
     Keyboard { key_code: u32, is_down: bool },

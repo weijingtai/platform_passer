@@ -36,7 +36,7 @@ impl InputSink for WindowsInputSink {
             }
             InputEvent::MouseMove { x, y } => {
                 input.r#type = INPUT_MOUSE;
-                // Note: Coordinates need to be mapped to 0-65535 for ABSOLUTE
+                // Normalized (0-1) to Windows absolute (0-65535)
                 input.Anonymous.mi = MOUSEINPUT {
                     dx: (x * 65535.0) as i32,
                     dy: (y * 65535.0) as i32,

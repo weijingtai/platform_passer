@@ -5,12 +5,13 @@ This document tracks Windows-side progress and architectural decisions to sync w
 ## Current Progress (M1 Iteration)
 
 - [x] **Input Handling**: 
-    - `WindowsInputSource`: Global hook for mouse/keyboard capture using `SetWindowsHookEx`.
-    - `WindowsInputSink`: Event injection using `SendInput`.
+    - `WindowsInputSource`: Global hook with **Normalized Coordinate (0.0-1.0)** capture.
+    - `WindowsInputSink`: Event injection with **Normalized Coordinate** support.
 - [x] **Clipboard**:
-    - `WindowsClipboard`: Basic text synchronization using a hidden window for notification.
-- [x] **Networking**:
-    - QUIC implementation via `quinn` is verified on Windows.
+    - `WindowsClipboard`: Basic text synchronization.
+- [x] **Session Logic Refactor**:
+    - `session/client.rs` and `session/server.rs` now use platform-agnostic traits and conditional compilation. 
+    - This allows the codebase to **compile on macOS**.
 
 ## Architectural Notes (For macOS Sync)
 

@@ -50,9 +50,12 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     if code >= 0 {
         let ms = &*(lparam.0 as *const MSLLHOOKSTRUCT);
         if wparam.0 as u32 == WM_MOUSEMOVE {
-             let event = InputEvent::MouseMove {
-                x: ms.pt.x as f32, // Note: Absolute coords for now
-                y: ms.pt.y as f32,
+            let screen_width = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN);
+            let screen_height = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN);
+            
+            let event = InputEvent::MouseMove {
+                x: ms.pt.x as f32 / screen_width as f32,
+                y: ms.pt.y as f32 / screen_height as f32,
             };
             if let Ok(guard) = GLOBAL_CALLBACK.lock() {
                 if let Some(cb) = &*guard {

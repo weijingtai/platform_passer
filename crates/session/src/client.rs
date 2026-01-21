@@ -118,9 +118,12 @@ pub async fn run_client_session(
     let (tx, mut rx) = mpsc::channel::<Frame>(100);
 
     // 4. Start Capture
-    let source = WindowsInputSource::new();
-    let tx_clone = tx.clone();
+    #[cfg(target_os = "windows")]
+    let source = platform_passer_input::WindowsInputSource::new();
+    #[cfg(target_os = "macos")]
+    let source = platform_passer_input::MacosInputSource::new();
     
+    let tx_clone = tx.clone();
     source.start_capture(Box::new(move |event| {
         let _ = tx_clone.blocking_send(Frame::Input(event));
     }))?;
@@ -128,9 +131,18 @@ pub async fn run_client_session(
     let _ = event_tx.send(SessionEvent::Log("Input capture started.".into())).await;
     
     // 6. Start Clipboard Listener
-    let clip = WindowsClipboard::new();
+    #[cfg(target_os = "windows")]
+    let clip = platform_passer_clipboard::WindowsClipboard::new();
+    // TODO: macOS Clipboard implementation
+    #[cfg(target_os = "macos")]
+    let clip = unimplemented!("macOS clipboard not yet integrated");
+    
     let tx_clip = tx.clone();
-    let clip_reader = WindowsClipboard::new();
+    
+    #[cfg(target_os = "windows")]
+    let clip_reader = platform_passer_clipboard::WindowsClipboard::new();
+    #[cfg(target_os = "macos")]
+    let clip_reader = unimplemented!();
     
     clip.start_listener(Box::new(move || {
         if let Ok(text) = clip_reader.get_text() {

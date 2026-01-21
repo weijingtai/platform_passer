@@ -13,7 +13,10 @@ pub async fn run_server_session(bind_addr: SocketAddr, event_tx: Sender<SessionE
     let _ = event_tx.send(SessionEvent::Log(format!("Starting server on {}", bind_addr))).await;
     
     // 1. Setup Input Sink
-    let sink = Arc::new(WindowsInputSink::new());
+    #[cfg(target_os = "windows")]
+    let sink: Arc<dyn platform_passer_input::InputSink> = Arc::new(platform_passer_input::WindowsInputSink::new());
+    #[cfg(target_os = "macos")]
+    let sink: Arc<dyn platform_passer_input::InputSink> = Arc::new(platform_passer_input::MacosInputSink::new());
     
     // 2. Setup QUIC Server
     let cert = generate_self_signed_cert(vec!["localhost".to_string()])?;
@@ -40,7 +43,7 @@ pub async fn run_server_session(bind_addr: SocketAddr, event_tx: Sender<SessionE
     Ok(())
 }
 
-async fn handle_connection(conn: quinn::Connecting, sink: Arc<WindowsInputSink>, event_tx: Sender<SessionEvent>) -> Result<()> {
+async fn handle_connection(conn: quinn::Connecting, sink: Arc<dyn platform_passer_input::InputSink>, event_tx: Sender<SessionEvent>) -> Result<()> {
     let connection = match conn.await {
         Ok(c) => c,
         Err(e) => {
@@ -53,7 +56,11 @@ async fn handle_connection(conn: quinn::Connecting, sink: Arc<WindowsInputSink>,
     let _ = event_tx.send(SessionEvent::Connected(remote_addr.to_string())).await;
     let _ = event_tx.send(SessionEvent::Log(format!("Connected: {}", remote_addr))).await;
     
-    let clip = WindowsClipboard::new();
+    #[cfg(target_os = "windows")]
+    let clip = platform_passer_clipboard::WindowsClipboard::new();
+    #[cfg(target_os = "macos")]
+    // let clip = platform_passer_clipboard::MacosClipboard::new();
+    unimplemented!("macOS clipboard not yet implemented");
 
     // Allow client to open a bi-directional stream
     while let Ok((mut send, mut recv)) = connection.accept_bi().await {
