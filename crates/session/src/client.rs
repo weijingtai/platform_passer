@@ -3,8 +3,8 @@ use crate::commands::SessionCommand;
 use anyhow::Result;
 use platform_passer_core::{Frame, InputEvent, ClipboardEvent, FileTransferRequest, FileTransferResponse, write_frame, read_frame};
 use platform_passer_transport::{make_client_endpoint};
-use platform_passer_input::{InputSource, WindowsInputSource};
-use platform_passer_clipboard::{ClipboardProvider, WindowsClipboard};
+use platform_passer_input::{InputSource, DefaultInputSource};
+use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::sync::mpsc::{self, Sender, Receiver};
@@ -118,10 +118,8 @@ pub async fn run_client_session(
     let (tx, mut rx) = mpsc::channel::<Frame>(100);
 
     // 4. Start Capture
-    #[cfg(target_os = "windows")]
-    let source = platform_passer_input::WindowsInputSource::new();
-    #[cfg(target_os = "macos")]
-    let source = platform_passer_input::MacosInputSource::new();
+    let source = DefaultInputSource::new();
+    let tx_clone = tx.clone();
     
     let tx_clone = tx.clone();
     source.start_capture(Box::new(move |event| {
@@ -131,18 +129,9 @@ pub async fn run_client_session(
     let _ = event_tx.send(SessionEvent::Log("Input capture started.".into())).await;
     
     // 6. Start Clipboard Listener
-    #[cfg(target_os = "windows")]
-    let clip = platform_passer_clipboard::WindowsClipboard::new();
-    // TODO: macOS Clipboard implementation
-    #[cfg(target_os = "macos")]
-    let clip = unimplemented!("macOS clipboard not yet integrated");
-    
+    let clip = DefaultClipboard::new();
     let tx_clip = tx.clone();
-    
-    #[cfg(target_os = "windows")]
-    let clip_reader = platform_passer_clipboard::WindowsClipboard::new();
-    #[cfg(target_os = "macos")]
-    let clip_reader = unimplemented!();
+    let clip_reader = DefaultClipboard::new();
     
     clip.start_listener(Box::new(move || {
         if let Ok(text) = clip_reader.get_text() {
@@ -240,7 +229,7 @@ async fn read_frame_loop(recv: &mut quinn::RecvStream, event_tx: &Sender<Session
                  // We don't have local clipboard handle here easily without passing it down?
                  // Or we can just set it ourselves since we are in async context?
                  // Wait, WindowsClipboard::new() is cheap unit struct.
-                 let clip = WindowsClipboard::new();
+                 let clip = DefaultClipboard::new();
                  if let Err(_) = clip.set_text(text) {}
              }
              Ok(Some(_)) => {},

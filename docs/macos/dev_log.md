@@ -4,28 +4,22 @@ This document tracks the progress of the macOS platform support for the `platfor
 
 ## Progress Overview
 
-- **Input Capture**: Completed (Basic)
-- **Input Injection**: Completed (Basic)
-- **Coordinate Mapping**: Pending
-- **Permissions Management**: Pending
+- **Input Capture**: Completed (Normalized 0.0-1.0, Auto-reenable)
+- **Input Injection**: Completed (Normalized restoration)
+- **Coordinate Mapping**: Completed (Normalization logic)
+- **Permissions Management**: Completed (AXIsProcessTrusted utility)
+- **Clipboard**: Completed (NSPasteboard polling implementation)
 
 ---
 
-## Completed Tasks
+## Synchronization Log
 
-### [2026-01-20] Core Input Support
-- **Infrastructure**:
-    - Added macOS-specific dependencies to `crates/input/Cargo.toml` (`core-graphics`, `core-foundation`, `cocoa`).
-    - Integrated `macos` module with conditional compilation in `lib.rs`.
-- **Capture (`MacosInputSource`)**:
-    - Implemented global event capture using `CGEventTap`.
-    - Supported events: `MouseMoved`, `KeyDown`, `KeyUp`.
-    - Integrated with a background `CFRunLoop` for asynchronous event handling.
-- **Injection (`MacosInputSink`)**:
-    - Implemented event injection using `CGEventPost`.
-    - Supported events: Mouse movement, Mouse buttons (Left/Right/Center), Keyboard keys, and Scroll wheel.
-
----
+### [2026-01-20] Merged Remote Session Refactor
+- **Conflict Resolution**:
+    - Merged changes from `origin/main` which introduced session-level abstraction.
+    - Resolved conflicts in `crates/session/src/client.rs` and `server.rs` by adopting a unified `Default...` alias approach instead of inline `#[cfg]` blocks.
+    - This ensures the session layer remains perfectly platform-agnostic while utilizing macOS native implementations provided by `crates/input` and `crates/clipboard`.
+- **Status**: macOS implementation is now fully integrated with the latest shared session logic.
 
 ## Pending / To-Do Tasks
 

@@ -17,10 +17,16 @@ impl InputSink for MacosInputSink {
 
         match event {
             InputEvent::MouseMove { x, y } => {
+                let display_id = unsafe { core_graphics::display::CGMainDisplayID() };
+                let bounds = unsafe { core_graphics::display::CGDisplayBounds(display_id) };
+                
                 let cg_event = CGEvent::new_mouse_event(
                     source,
                     CGEventType::MouseMoved,
-                    core_graphics::geometry::CGPoint::new(x as f64, y as f64),
+                    core_graphics::geometry::CGPoint::new(
+                        (x as f64) * bounds.size.width,
+                        (y as f64) * bounds.size.height,
+                    ),
                     CGMouseButton::Left,
                 ).map_err(|_| anyhow!("Failed to create mouse move event"))?;
                 cg_event.post(CGEventTapLocation::HID);

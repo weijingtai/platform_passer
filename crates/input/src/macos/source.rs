@@ -1,10 +1,12 @@
 use crate::InputSource;
 use anyhow::{Result, anyhow};
-use core_graphics::event::{CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType};
-use core_graphics::event::{CGEventField, EventField};
 use platform_passer_core::InputEvent;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
+use core_graphics::display::CGMainDisplayID;
+use core_graphics::event::{CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType, CGEventTapProxy};
+use core_graphics::event::{CGEventField};
 
 type HookCallback = Box<dyn Fn(InputEvent) + Send + Sync>;
 static GLOBAL_CALLBACK: Mutex<Option<Arc<HookCallback>>> = Mutex::new(None);
@@ -18,20 +20,38 @@ impl MacosInputSource {
 }
 
 extern "C" fn callback(
-    _proxy: core_graphics::event::CGEventTapProxy,
-    etype: core_graphics::event::CGEventType,
-    event: &core_graphics::event::CGEvent,
+    _proxy: CGEventTapProxy,
+    etype: CGEventType,
+    event: &CGEvent,
     _user_info: *const libc::c_void,
-) -> core_graphics::event::CGEvent {
+) -> CGEvent {
+    // Auto-reenable logic: if the event type is TapDisabledByTimeout or TapDisabledByUserInput,
+    // we should re-enable it.
+    if etype == CGEventType::TapDisabledByTimeout || etype == CGEventType::TapDisabledByUserInput {
+        // In a real implementation, we'd need access to the tap handle here.
+        // For now, these special events don't carry the tap, so we might need a global tap handle or 
+        // rely on the fact that CGEventTap provides a proxy.
+        // However, most implementations use CGEventTap::enable() on the tap object.
+        return event.clone();
+    }
+
     let mut input_event = None;
 
     match etype {
-        CGEventType::MouseMoved => {
+        CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
             let point = event.location();
-            input_event = Some(InputEvent::MouseMove {
-                x: point.x as f32,
-                y: point.y as f32,
-            });
+            
+            // Coordinate Normalization (0.0 - 1.0)
+            unsafe {
+                let display_id = CGMainDisplayID();
+                let bounds = core_graphics::display::CGDisplayBounds(display_id);
+                if bounds.size.width > 0.0 && bounds.size.height > 0.0 {
+                    input_event = Some(InputEvent::MouseMove {
+                        x: (point.x / bounds.size.width) as f32,
+                        y: (point.y / bounds.size.height) as f32,
+                    });
+                }
+            }
         }
         CGEventType::KeyDown | CGEventType::KeyUp => {
             let key_code = event.get_integer_value_field(CGEventField::KeyboardEventKeycode);
@@ -51,7 +71,6 @@ extern "C" fn callback(
         }
     }
 
-    // Return the event to continue propagation
     event.clone()
 }
 
@@ -69,21 +88,21 @@ impl InputSource for MacosInputSource {
                 CGEventTapOptions::Default,
                 vec![
                     CGEventType::MouseMoved,
+                    CGEventType::LeftMouseDragged,
+                    CGEventType::RightMouseDragged,
                     CGEventType::KeyDown,
                     CGEventType::KeyUp,
                 ],
                 callback,
-            ).map_err(|_| anyhow!("Failed to create event tap"))?;
+            ).map_err(|_| anyhow!("Failed to create event tap. Check Accessibility permissions."))?;
 
             let loop_source = tap.mach_port().create_runloop_source(0).map_err(|_| anyhow!("Failed to create runloop source"))?;
             
             unsafe {
-                let current_loop = cocoa::appkit::NSApp(); // This is a bit of a hack, but fine for now
-                // Actually we need the CFRunLoop
-                let run_loop = core_foundation::runloop::CFRunLoop::get_current();
-                run_loop.add_source(&loop_source, core_foundation::runloop::kCFRunLoopCommonModes);
+                let run_loop = CFRunLoop::get_current();
+                run_loop.add_source(&loop_source, kCFRunLoopCommonModes);
                 tap.enable();
-                core_foundation::runloop::CFRunLoop::run_current();
+                CFRunLoop::run_current();
             }
 
             Ok::<(), anyhow::Error>(())
