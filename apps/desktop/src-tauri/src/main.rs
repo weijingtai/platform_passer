@@ -5,7 +5,6 @@ use platform_passer_session::{run_client_session, run_server_session, SessionEve
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::path::PathBuf;
 
 // Simple state to hold active session handle? 
@@ -49,7 +48,7 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
         let (tx, mut rx) = mpsc::channel(100);
         let bind_addr: SocketAddr = format!("{}:{}", ip, port).parse().unwrap_or_else(|_| "0.0.0.0:4433".parse().unwrap());
         
-        let session_task = tokio::spawn(async move {
+        let _session_task = tokio::spawn(async move {
             run_server_session(bind_addr, tx).await
         });
         
@@ -95,7 +94,7 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
         let server_addr_str = format!("{}:{}", ip_clone, port);
         let server_addr: SocketAddr = server_addr_str.parse().unwrap_or_else(|_| "127.0.0.1:4433".parse().unwrap());
         
-        let session_task = tokio::spawn(async move {
+        let _session_task = tokio::spawn(async move {
             run_client_session(server_addr, None, cmd_rx, tx).await
         });
 
@@ -137,7 +136,17 @@ struct Payload {
 }
 
 fn main() {
-    tracing_subscriber::fmt::init();
+    let filter = if cfg!(debug_assertions) {
+        "debug,quinn=info,rustls=info"
+    } else {
+        "info"
+    };
+
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| filter.into()),
+        ))
+        .init();
     
     tauri::Builder::default()
         .manage(AppState { 

@@ -14,6 +14,18 @@ This document tracks the progress of the macOS platform support for the `platfor
 
 ## Synchronization Log
 
+### [2026-01-21] Robust Logging & ALPN Fix
+- **Networking Stability**:
+    - Resolved `no_application_protocol` (Error 120) by implementing explicit ALPN configuration (`pp/1`) on both client and server transport layers.
+    - Fixed compilation errors in `crates/session` related to duplicate dependencies and platform-specific types.
+- **Enhanced Observability**:
+    - Implemented a structured logging system using `tracing-subscriber` with `EnvFilter`.
+    - Configured build-sensitive log levels (Debug for dev, Info for prod).
+    - Added deep tracing logs in `transport` and `session` crates to monitor handshakes and stream lifecycle.
+- **Verification**:
+    - Successfully performed a local loopback test using the CLI tool.
+    - Confirmed handshake success, bi-directional stream opening, and clipboard data exchange.
+
 ### [2026-01-20] Merged Remote Session Refactor
 - **Conflict Resolution**:
     - Merged changes from `origin/main` which introduced session-level abstraction.

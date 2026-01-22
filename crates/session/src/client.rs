@@ -1,12 +1,13 @@
 use crate::events::SessionEvent;
 use crate::commands::SessionCommand;
 use anyhow::Result;
-use platform_passer_core::{Frame, InputEvent, ClipboardEvent, FileTransferRequest, FileTransferResponse, write_frame, read_frame};
+use platform_passer_core::{Frame, ClipboardEvent, FileTransferRequest, write_frame, read_frame};
 use platform_passer_transport::{make_client_endpoint};
 use platform_passer_input::{InputSink, DefaultInputSink};
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::mpsc::{self, Sender, Receiver};
 use tokio::fs::File;
 
@@ -17,33 +18,41 @@ pub async fn run_client_session(
     mut cmd_rx: Receiver<SessionCommand>,
     event_tx: Sender<SessionEvent>
 ) -> Result<()> {
+    tracing::info!("Starting client session to {}", server_addr);
     let _ = event_tx.send(SessionEvent::Log(format!("Connecting to {}", server_addr))).await;
 
     // 1. Setup QUIC Client
     let endpoint = make_client_endpoint("0.0.0.0:0".parse()?)?;
+    tracing::debug!("Awaiting handshake with {}", server_addr);
     let _ = event_tx.send(SessionEvent::Log("Awaiting handshake...".into())).await;
+    
     let connection = match endpoint.connect(server_addr, "localhost")?.await {
         Ok(c) => c,
         Err(e) => {
+            tracing::error!("Connection to {} failed: {}", server_addr, e);
             let _ = event_tx.send(SessionEvent::Error(format!("Connection failed: {}", e))).await;
             return Err(e.into());
         }
     };
     
+    tracing::info!("Connected to {}!", server_addr);
     let _ = event_tx.send(SessionEvent::Connected(connection.remote_address().to_string())).await;
     let _ = event_tx.send(SessionEvent::Log("Connected!".into())).await;
 
+    tracing::debug!("Opening bi-directional protocol stream to {}", server_addr);
     let (mut send, mut recv) = connection.open_bi().await?;
+    tracing::info!("Protocol Stream opened to {}", server_addr);
     let _ = event_tx.send(SessionEvent::Log("Protocol Stream opened".into())).await;
     
     // 2.5 Handle Initial File Send (Legacy M4 CLI support)
     // We can just queue it? Or run it.
     if let Some(path) = send_file_path {
+        tracing::info!("Initial file send requested: {:?}", path);
         // reuse perform_file_send but we need streams.
         // For MVP, since we changed protocol to use NEW stream for request (see above), 
         // we can just call it.
         // Wait, perform_file_send creates new stream.
-        let mut dummy_send = connection.open_uni().await?; // Hack to satisfy type if we passed refs, but we changed sig.
+        let _ = connection.open_uni().await?; // Hack to satisfy type if we passed refs, but we changed sig.
         // Actually perform_file_send takes connection.
         
         // We don't need 'send'/'recv' args if we open new streams?
@@ -113,6 +122,7 @@ async fn perform_file_send(
     path: PathBuf, 
     event_tx: &Sender<SessionEvent>
 ) -> Result<()> {
+    tracing::info!("Sending file: {:?}", path);
     let _ = event_tx.send(SessionEvent::Log(format!("Sending file: {:?}", path))).await;
     if let Ok(metadata) = tokio::fs::metadata(&path).await {
         let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -125,53 +135,71 @@ async fn perform_file_send(
         });
 
         // Open new bi-stream for negotiation to avoid race with main loop
+        tracing::debug!("Opening new bi-stream for file transfer negotiation");
         let (mut req_send, mut req_recv) = connection.open_bi().await?;
         write_frame(&mut req_send, &req).await?;
         
         // Wait for response on THIS stream
+        tracing::debug!("Awaiting file transfer response");
         match read_frame(&mut req_recv).await? {
              Some(Frame::FileTransferResponse(resp)) => {
                 if resp.accepted {
+                     tracing::info!("File transfer accepted by remote");
                      let _ = event_tx.send(SessionEvent::Log("Transfer accepted. Sending data...".into())).await;
                      let mut uni_send = connection.open_uni().await?;
                      let mut file = File::open(&path).await?;
+                     tracing::debug!("Copying file data to uni-stream");
                      tokio::io::copy(&mut file, &mut uni_send).await?;
                      uni_send.finish().await?;
+                     tracing::info!("File sent successfully: {}", path.display());
                      let _ = event_tx.send(SessionEvent::Log("File sent successfully.".into())).await;
                 } else {
+                     tracing::warn!("File transfer rejected by remote");
                      let _ = event_tx.send(SessionEvent::Error("Transfer rejected.".into())).await;
                 }
              }
              _ => {
+                 tracing::error!("Received invalid response for file transfer");
                  let _ = event_tx.send(SessionEvent::Error("Invalid response for file transfer.".into())).await;
              }
         }
+    } else {
+        tracing::error!("Failed to get metadata for file: {:?}", path);
     }
     Ok(())
 }
 
 async fn read_frame_loop(
     recv: &mut quinn::RecvStream, 
-    event_tx: &Sender<SessionEvent>, 
+    _event_tx: &Sender<SessionEvent>, 
     sink: Arc<DefaultInputSink>
 ) {
+    let _remote_addr = "remote"; // We don't have it here easily, but let's just log
+    tracing::debug!("Starting frame read loop");
     loop {
          match read_frame(recv).await {
              Ok(Some(Frame::Input(event))) => {
+                 tracing::trace!("Received input event: {:?}", event);
                  if let Err(e) = sink.inject_event(event) {
-                     // log error
+                     tracing::error!("Failed to inject input event: {}", e);
                  }
              }
              Ok(Some(Frame::Clipboard(ClipboardEvent::Text(text)))) => {
-                 // We don't have local clipboard handle here easily without passing it down?
-                 // Or we can just set it ourselves since we are in async context?
-                 // Wait, WindowsClipboard::new() is cheap unit struct.
+                 tracing::debug!("Received clipboard text");
                  let clip = DefaultClipboard::new();
                  let _ = clip.set_text(text);
              }
-             Ok(Some(_)) => {},
-             Ok(None) => return, // Closed
-             Err(_) => return, // Error
+             Ok(Some(_)) => {
+                 tracing::warn!("Received unexpected frame");
+             },
+             Ok(None) => {
+                 tracing::info!("Read frame loop: Stream closed");
+                 return;
+             }
+             Err(e) => {
+                 tracing::error!("Read frame loop error: {}", e);
+                 return;
+             }
          }
     }
 }

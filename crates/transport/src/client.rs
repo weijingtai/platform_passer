@@ -20,17 +20,22 @@ impl rustls::client::ServerCertVerifier for SkipServerVerification {
 }
 
 pub fn make_client_endpoint(bind_addr: SocketAddr) -> Result<Endpoint> {
+    tracing::debug!("Creating client endpoint on {}", bind_addr);
     let client_cfg = configure_client();
-    let mut endpoint = Endpoint::client(bind_addr)?;
+    let mut endpoint = Endpoint::client(bind_addr)
+        .context(format!("Failed to create client endpoint on {}", bind_addr))?;
     endpoint.set_default_client_config(client_cfg);
+    tracing::info!("Client endpoint created successfully on {}", bind_addr);
     Ok(endpoint)
 }
 
 fn configure_client() -> ClientConfig {
-    let crypto = rustls::ClientConfig::builder()
+    let mut crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
         .with_no_client_auth();
+    
+    crypto.alpn_protocols = vec![b"pp/1".to_vec()];
     
     ClientConfig::new(Arc::new(crypto))
 }
