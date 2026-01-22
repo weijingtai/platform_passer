@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use platform_passer_session::{run_client_session, run_server_session, SessionEvent};
+use platform_passer_session::{run_client_session, run_server_session, SessionEvent, LogLevel};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -53,7 +53,15 @@ async fn run_server(bind_addr: SocketAddr) -> Result<()> {
     // Handle events
     while let Some(event) = rx.recv().await {
         match event {
-            SessionEvent::Log(msg) => info!("{}", msg),
+            SessionEvent::Log { level, message } => {
+                match level {
+                    LogLevel::Error => error!("{}", message),
+                    LogLevel::Warn => info!("[WARN] {}", message),
+                    LogLevel::Info => info!("{}", message),
+                    LogLevel::Debug => info!("[DEBUG] {}", message),
+                    LogLevel::Trace => info!("[TRACE] {}", message),
+                }
+            }
             SessionEvent::Connected(addr) => info!("Connected: {}", addr),
             SessionEvent::Disconnected => info!("Disconnected"),
             SessionEvent::Error(msg) => error!("{}", msg),
@@ -64,7 +72,6 @@ async fn run_server(bind_addr: SocketAddr) -> Result<()> {
 
 async fn run_client(server_addr: SocketAddr, send_file_path: Option<PathBuf>) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(100);
-    // CLI doesn't use dynamic commands yet, so just pass a dummy receiver
     let (_cmd_tx, cmd_rx) = mpsc::channel(1); 
 
      tokio::spawn(async move {
@@ -75,7 +82,15 @@ async fn run_client(server_addr: SocketAddr, send_file_path: Option<PathBuf>) ->
 
     while let Some(event) = rx.recv().await {
         match event {
-            SessionEvent::Log(msg) => info!("{}", msg),
+            SessionEvent::Log { level, message } => {
+                match level {
+                    LogLevel::Error => error!("{}", message),
+                    LogLevel::Warn => info!("[WARN] {}", message),
+                    LogLevel::Info => info!("{}", message),
+                    LogLevel::Debug => info!("[DEBUG] {}", message),
+                    LogLevel::Trace => info!("[TRACE] {}", message),
+                }
+            }
             SessionEvent::Connected(addr) => info!("Connected: {}", addr),
             SessionEvent::Disconnected => info!("Disconnected"),
             SessionEvent::Error(msg) => error!("{}", msg),

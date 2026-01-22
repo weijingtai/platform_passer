@@ -1,6 +1,6 @@
 use anyhow::{Result, Context};
-use quinn::{Endpoint, ServerConfig};
-use std::{net::SocketAddr, sync::Arc};
+use quinn::{Endpoint, ServerConfig, TransportConfig};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use crate::cert::Certificate;
 
 pub fn make_server_endpoint(bind_addr: SocketAddr, cert: &Certificate) -> Result<Endpoint> {
@@ -16,9 +16,16 @@ pub fn make_server_endpoint(bind_addr: SocketAddr, cert: &Certificate) -> Result
         .context("Failed to create server crypto config")?;
     
     crypto.alpn_protocols = vec![b"pp/1".to_vec()];
+    tracing::debug!("Server ALPN protocols set to: {:?}", crypto.alpn_protocols);
 
-    let server_config = ServerConfig::with_crypto(Arc::new(crypto));
+    let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
     
+    // Set transport-specific parameters
+    let mut transport_config = TransportConfig::default();
+    transport_config.max_idle_timeout(Some(Duration::from_secs(60).try_into()?));
+    transport_config.keep_alive_interval(Some(Duration::from_secs(10)));
+    server_config.transport_config(Arc::new(transport_config));
+
     let endpoint = Endpoint::server(server_config, bind_addr)
         .context(format!("Failed to bind server to {}", bind_addr))?;
     

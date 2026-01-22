@@ -2557,6 +2557,7 @@ dependencies = [
  "platform-passer-transport",
  "quinn",
  "rand 0.8.5",
+ "serde",
  "tokio",
  "tracing",
 ]

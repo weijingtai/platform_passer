@@ -1,5 +1,6 @@
-use crate::events::SessionEvent;
+use crate::events::{SessionEvent, LogLevel};
 use crate::commands::SessionCommand;
+use crate::{log_info, log_error, log_debug, log_warn};
 use anyhow::Result;
 use platform_passer_core::{Frame, ClipboardEvent, FileTransferRequest, write_frame, read_frame};
 use platform_passer_transport::{make_client_endpoint};
@@ -18,57 +19,40 @@ pub async fn run_client_session(
     mut cmd_rx: Receiver<SessionCommand>,
     event_tx: Sender<SessionEvent>
 ) -> Result<()> {
-    tracing::info!("Starting client session to {}", server_addr);
-    let _ = event_tx.send(SessionEvent::Log(format!("Connecting to {}", server_addr))).await;
+    log_info!(&event_tx, "Attempting connection to {}", server_addr);
 
     // 1. Setup QUIC Client
     let endpoint = make_client_endpoint("0.0.0.0:0".parse()?)?;
-    tracing::debug!("Awaiting handshake with {}", server_addr);
-    let _ = event_tx.send(SessionEvent::Log("Awaiting handshake...".into())).await;
-    
+    log_debug!(&event_tx, "QUIC Client endpoint bound. Starting handshake...");
     let connection = match endpoint.connect(server_addr, "localhost")?.await {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Connection to {} failed: {}", server_addr, e);
+            log_error!(&event_tx, "QUIC Connection failed: {}", e);
             let _ = event_tx.send(SessionEvent::Error(format!("Connection failed: {}", e))).await;
             return Err(e.into());
         }
     };
     
-    tracing::info!("Connected to {}!", server_addr);
+    log_info!(&event_tx, "Handshake completed with {}", connection.remote_address());
     let _ = event_tx.send(SessionEvent::Connected(connection.remote_address().to_string())).await;
-    let _ = event_tx.send(SessionEvent::Log("Connected!".into())).await;
-
-    tracing::debug!("Opening bi-directional protocol stream to {}", server_addr);
-    let (mut send, mut recv) = connection.open_bi().await?;
-    tracing::info!("Protocol Stream opened to {}", server_addr);
-    let _ = event_tx.send(SessionEvent::Log("Protocol Stream opened".into())).await;
-    
-    // 2.5 Handle Initial File Send (Legacy M4 CLI support)
-    // We can just queue it? Or run it.
-    if let Some(path) = send_file_path {
-        tracing::info!("Initial file send requested: {:?}", path);
-        // reuse perform_file_send but we need streams.
-        // For MVP, since we changed protocol to use NEW stream for request (see above), 
-        // we can just call it.
-        // Wait, perform_file_send creates new stream.
-        let _ = connection.open_uni().await?; // Hack to satisfy type if we passed refs, but we changed sig.
-        // Actually perform_file_send takes connection.
-        
-        // We don't need 'send'/'recv' args if we open new streams?
-        // Let's update perform_file_send to NOT take send/recv streams, but open its own.
-        // Correct.
-        perform_file_send(&connection, path, &event_tx).await?;
-        return Ok(());
-    }
-
-    // 3. Setup Channel for Mixed Events
-    let (tx, mut rx) = mpsc::channel::<Frame>(100);
 
     // 2. Setup Input Sink (Client receives inputs and injects them)
     let sink = Arc::new(DefaultInputSink::new());
-    let _ = event_tx.send(SessionEvent::Log("Input sink ready.".into())).await;
+    log_debug!(&event_tx, "Local input sink initialized.");
+
+    let (mut send, mut recv) = connection.open_bi().await?;
+    log_debug!(&event_tx, "Main protocol stream opened successfully.");
     
+    // 3. Setup Channel for Mixed Events
+    let (tx, mut rx) = mpsc::channel::<Frame>(100);
+
+    // 5. Spawn Read Loop in Background
+    let event_tx_read = event_tx.clone();
+    let sink_read = sink.clone();
+    tokio::spawn(async move {
+        read_frame_loop(recv, event_tx_read, sink_read).await;
+    });
+
     // 6. Start Clipboard Listener
     let clip = DefaultClipboard::new();
     let tx_clip = tx.clone();
@@ -81,12 +65,12 @@ pub async fn run_client_session(
              }
         }
     }))?;
-    let _ = event_tx.send(SessionEvent::Log("Clipboard listener started.".into())).await;
+    log_info!(&event_tx, "Local clipboard synchronization active.");
 
-    // 5. Main Loop
+    // 7. Main Outbound Loop
     loop {
         tokio::select! {
-            // Priority 1: Commands
+            // Priority 1: Commands from UI/CLI
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
                     SessionCommand::SendFile(path) => {
@@ -97,22 +81,17 @@ pub async fn run_client_session(
                     SessionCommand::Disconnect => break,
                 }
             }
-            // Priority 2: Input Events
+            // Priority 2: Outbound Frames (Clipboard, etc.)
             Some(frame) = rx.recv() => {
                 if let Err(e) = write_frame(&mut send, &frame).await {
-                    let _ = event_tx.send(SessionEvent::Error(format!("Send error: {}", e))).await;
+                    log_error!(&event_tx, "Failed to send frame: {}", e);
                     break;
                 }
             }
-            // Priority 3: Keepalive/Incoming? 
-            // We need to read 'recv' for inputs and clipboard
-             _ = read_frame_loop(&mut recv, &event_tx, sink.clone()) => {
-                 // If this returns, stream closed or error
-                 break;
-             }
         }
     }
     
+    log_info!(&event_tx, "Client session terminating...");
     let _ = event_tx.send(SessionEvent::Disconnected).await;
     Ok(())
 }
@@ -122,8 +101,7 @@ async fn perform_file_send(
     path: PathBuf, 
     event_tx: &Sender<SessionEvent>
 ) -> Result<()> {
-    tracing::info!("Sending file: {:?}", path);
-    let _ = event_tx.send(SessionEvent::Log(format!("Sending file: {:?}", path))).await;
+    log_info!(event_tx, "Initiating file transfer for: {:?}", path);
     if let Ok(metadata) = tokio::fs::metadata(&path).await {
         let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let size = metadata.len();
@@ -135,71 +113,68 @@ async fn perform_file_send(
         });
 
         // Open new bi-stream for negotiation to avoid race with main loop
-        tracing::debug!("Opening new bi-stream for file transfer negotiation");
+        log_debug!(event_tx, "Opening new bi-stream for file transfer negotiation");
         let (mut req_send, mut req_recv) = connection.open_bi().await?;
         write_frame(&mut req_send, &req).await?;
         
         // Wait for response on THIS stream
-        tracing::debug!("Awaiting file transfer response");
+        log_debug!(event_tx, "Awaiting file transfer response");
         match read_frame(&mut req_recv).await? {
              Some(Frame::FileTransferResponse(resp)) => {
                 if resp.accepted {
-                     tracing::info!("File transfer accepted by remote");
-                     let _ = event_tx.send(SessionEvent::Log("Transfer accepted. Sending data...".into())).await;
+                     log_info!(event_tx, "File transfer request accepted. Uploading...");
                      let mut uni_send = connection.open_uni().await?;
                      let mut file = File::open(&path).await?;
-                     tracing::debug!("Copying file data to uni-stream");
-                     tokio::io::copy(&mut file, &mut uni_send).await?;
+                     let n = tokio::io::copy(&mut file, &mut uni_send).await?;
                      uni_send.finish().await?;
-                     tracing::info!("File sent successfully: {}", path.display());
-                     let _ = event_tx.send(SessionEvent::Log("File sent successfully.".into())).await;
+                     log_info!(event_tx, "File upload complete: {} bytes.", n);
                 } else {
-                     tracing::warn!("File transfer rejected by remote");
+                     log_warn!(event_tx, "File transfer request was rejected by server.");
                      let _ = event_tx.send(SessionEvent::Error("Transfer rejected.".into())).await;
                 }
              }
              _ => {
-                 tracing::error!("Received invalid response for file transfer");
+                 log_error!(event_tx, "Received invalid response for file transfer");
                  let _ = event_tx.send(SessionEvent::Error("Invalid response for file transfer.".into())).await;
              }
         }
     } else {
-        tracing::error!("Failed to get metadata for file: {:?}", path);
+        log_error!(event_tx, "Failed to get metadata for file: {:?}", path);
     }
     Ok(())
 }
 
 async fn read_frame_loop(
-    recv: &mut quinn::RecvStream, 
-    _event_tx: &Sender<SessionEvent>, 
+    mut recv: quinn::RecvStream, 
+    event_tx: Sender<SessionEvent>, 
     sink: Arc<DefaultInputSink>
 ) {
-    let _remote_addr = "remote"; // We don't have it here easily, but let's just log
-    tracing::debug!("Starting frame read loop");
+    log_debug!(&event_tx, "Starting frame read loop");
     loop {
-         match read_frame(recv).await {
+         match read_frame(&mut recv).await {
              Ok(Some(Frame::Input(event))) => {
-                 tracing::trace!("Received input event: {:?}", event);
                  if let Err(e) = sink.inject_event(event) {
-                     tracing::error!("Failed to inject input event: {}", e);
+                     log_debug!(&event_tx, "Warning: Failed to inject input event: {}", e);
                  }
              }
              Ok(Some(Frame::Clipboard(ClipboardEvent::Text(text)))) => {
-                 tracing::debug!("Received clipboard text");
+                 log_info!(&event_tx, "Updating local clipboard from server synchronization.");
                  let clip = DefaultClipboard::new();
-                 let _ = clip.set_text(text);
+                 if let Err(e) = clip.set_text(text) {
+                     log_error!(&event_tx, "Fatal: Clipboard update failed: {}", e);
+                 }
              }
              Ok(Some(_)) => {
-                 tracing::warn!("Received unexpected frame");
+                 log_debug!(&event_tx, "Received unknown frame type from server.");
              },
              Ok(None) => {
-                 tracing::info!("Read frame loop: Stream closed");
+                 log_info!(&event_tx, "Inbound protocol stream closed by server.");
                  return;
-             }
+             },
              Err(e) => {
-                 tracing::error!("Read frame loop error: {}", e);
+                 log_error!(&event_tx, "Inbound protocol stream error: {}", e);
                  return;
-             }
+             },
          }
     }
 }

@@ -1,7 +1,8 @@
 use anyhow::{Result, Context};
-use quinn::{Endpoint, ClientConfig};
+use quinn::{Endpoint, ClientConfig, TransportConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 struct SkipServerVerification;
 
@@ -36,6 +37,15 @@ fn configure_client() -> ClientConfig {
         .with_no_client_auth();
     
     crypto.alpn_protocols = vec![b"pp/1".to_vec()];
+    tracing::debug!("Client ALPN protocols set to: {:?}", crypto.alpn_protocols);
     
-    ClientConfig::new(Arc::new(crypto))
+    let mut client_config = ClientConfig::new(Arc::new(crypto));
+
+    // Set transport-specific parameters
+    let mut transport_config = TransportConfig::default();
+    transport_config.max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()));
+    transport_config.keep_alive_interval(Some(Duration::from_secs(10)));
+    client_config.transport_config(Arc::new(transport_config));
+    
+    client_config
 }
