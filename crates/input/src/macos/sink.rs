@@ -2,13 +2,20 @@ use crate::InputSink;
 use anyhow::{Result, anyhow};
 use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton};
 use core_graphics::event_source::CGEventSource;
+use core_graphics::geometry::CGPoint;
+use foreign_types::ForeignType;
 use platform_passer_core::InputEvent;
+use std::sync::Mutex;
 
-pub struct MacosInputSink;
+pub struct MacosInputSink {
+    last_pos: Mutex<CGPoint>,
+}
 
 impl MacosInputSink {
     pub fn new() -> Self {
-        Self
+        Self {
+            last_pos: Mutex::new(CGPoint::new(0.0, 0.0)),
+        }
     }
 }
 
@@ -21,19 +28,26 @@ impl InputSink for MacosInputSink {
                 let display_id = unsafe { core_graphics::display::CGMainDisplayID() };
                 let bounds = unsafe { core_graphics::display::CGDisplayBounds(display_id) };
                 
-                let cg_event = CGEvent::new_mouse_event(
+                let target_pos = CGPoint::new(
+                    (x as f64) * bounds.size.width,
+                    (y as f64) * bounds.size.height,
+                );
+
+                // Update last known position
+                if let Ok(mut pos) = self.last_pos.lock() {
+                    *pos = target_pos;
+                }
+
+                let cg_event = core_graphics::event::CGEvent::new_mouse_event(
                     source,
                     CGEventType::MouseMoved,
-                    core_graphics::geometry::CGPoint::new(
-                        (x as f64) * bounds.size.width,
-                        (y as f64) * bounds.size.height,
-                    ),
+                    target_pos,
                     CGMouseButton::Left,
                 ).map_err(|_| anyhow!("Failed to create mouse move event"))?;
                 cg_event.post(CGEventTapLocation::HID);
             }
             InputEvent::Keyboard { key_code, is_down } => {
-                let cg_event = CGEvent::new_keyboard_event(
+                let cg_event = core_graphics::event::CGEvent::new_keyboard_event(
                     source,
                     key_code as u16,
                     is_down,
@@ -64,36 +78,46 @@ impl InputSink for MacosInputSink {
                     }
                 };
 
-                // We need the current mouse position for button events on macOS
-                // For now, we'll use (0,0) or better, get current position if possible.
-                // In a real app, we'd track the last known mouse position.
-                let cg_event = CGEvent::new_mouse_event(
+                let pos = if let Ok(p) = self.last_pos.lock() {
+                    *p
+                } else {
+                    CGPoint::new(0.0, 0.0)
+                };
+
+                let cg_event = core_graphics::event::CGEvent::new_mouse_event(
                     source,
                     etype,
-                    core_graphics::geometry::CGPoint::new(0.0, 0.0), // Placeholder
+                    pos,
                     button,
                 ).map_err(|_| anyhow!("Failed to create mouse button event"))?;
                 cg_event.post(CGEventTapLocation::HID);
             }
-            InputEvent::Scroll { dx, dy } => {
+            InputEvent::Scroll { dx: _dx, dy } => {
+                extern "C" {
+                    fn CGEventCreateScrollWheelEvent2(
+                        source: *mut std::ffi::c_void,
+                        units: u32,
+                        wheelCount: u32,
+                        wheel1: i32,
+                        wheel2: i32,
+                        wheel3: i32,
+                    ) -> *mut std::ffi::c_void;
+                }
+
                 unsafe {
-                    let source_ptr: *mut libc::c_void = std::mem::transmute(source);
-                    extern "C" {
-                        fn CGEventCreateScrollWheelEvent(
-                            source: *mut libc::c_void,
-                            units: i32,
-                            wheelCount: u32,
-                            wheel1: i32,
-                            ...
-                        ) -> *mut libc::c_void;
+                    let source_ptr: *mut std::ffi::c_void = std::mem::transmute(source);
+                    let event_ptr = CGEventCreateScrollWheelEvent2(
+                        source_ptr,
+                        0, // Pixel units
+                        1, // wheel count
+                        dy as i32,
+                        0,
+                        0,
+                    );
+                    if !event_ptr.is_null() {
+                        let cg_event = CGEvent::from_ptr(event_ptr as *mut _);
+                        cg_event.post(CGEventTapLocation::HID);
                     }
-                    // This is getting complex for a quick fix. 
-                    // Let's see if we can just use new_mouse_event with a scroll type if available,
-                    // but macOS defines Scroll as a separate event type.
-                    // Actually, a simpler way is to use CGEvent::new(source).
-                    // But for now, since I can't easily fix the FFI signature here (variadic etc),
-                    // I will skip scroll or use a placeholder to let the app COMPILE first.
-                    log::warn!("Scroll injection not yet fully implemented on macOS branch");
                 }
             }
         }

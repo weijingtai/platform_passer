@@ -1,8 +1,8 @@
-use crate::events::{SessionEvent, LogLevel};
+use crate::events::SessionEvent;
 use crate::commands::SessionCommand;
-use crate::{log_info, log_error, log_debug, log_warn};
+use crate::{log_info, log_error, log_debug};
 use anyhow::Result;
-use platform_passer_core::{Frame, ClipboardEvent, FileTransferRequest, write_frame, read_frame};
+use platform_passer_core::{Frame, ClipboardEvent, FileTransferRequest, Handshake, Heartbeat, write_frame, read_frame};
 use platform_passer_transport::{make_client_endpoint};
 use platform_passer_input::{InputSink, DefaultInputSink};
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
@@ -11,11 +11,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, Sender, Receiver};
 use tokio::fs::File;
+use std::time::Duration;
 
 
 pub async fn run_client_session(
     server_addr: SocketAddr, 
-    send_file_path: Option<PathBuf>,
+    _send_file_path: Option<PathBuf>,
     mut cmd_rx: Receiver<SessionCommand>,
     event_tx: Sender<SessionEvent>
 ) -> Result<()> {
@@ -23,7 +24,7 @@ pub async fn run_client_session(
 
     // 1. Setup QUIC Client
     let endpoint = make_client_endpoint("0.0.0.0:0".parse()?)?;
-    log_debug!(&event_tx, "QUIC Client endpoint bound. Starting handshake...");
+    log_debug!(&event_tx, "QUIC Client endpoint bound. Starting connection...");
     let connection = match endpoint.connect(server_addr, "localhost")?.await {
         Ok(c) => c,
         Err(e) => {
@@ -33,7 +34,7 @@ pub async fn run_client_session(
         }
     };
     
-    log_info!(&event_tx, "Handshake completed with {}", connection.remote_address());
+    log_info!(&event_tx, "QUIC Connection established with {}", connection.remote_address());
     let _ = event_tx.send(SessionEvent::Connected(connection.remote_address().to_string())).await;
 
     // 2. Setup Input Sink (Client receives inputs and injects them)
@@ -42,15 +43,34 @@ pub async fn run_client_session(
 
     let (mut send, mut recv) = connection.open_bi().await?;
     log_debug!(&event_tx, "Main protocol stream opened successfully.");
+
+    // 3. Perform Protocol Handshake
+    log_debug!(&event_tx, "Performing protocol handshake...");
+    let handshake = Frame::Handshake(Handshake {
+        version: 1,
+        client_id: "macos-client".to_string(),
+        capabilities: vec!["input".to_string(), "clipboard".to_string(), "file-transfer".to_string()],
+    });
+    write_frame(&mut send, &handshake).await?;
+    match read_frame(&mut recv).await? {
+        Some(Frame::Handshake(_)) => {
+            log_info!(&event_tx, "Protocol handshake successful.");
+        }
+        _ => {
+            log_error!(&event_tx, "Protocol handshake failed: Invalid response from server.");
+            return Err(anyhow::anyhow!("Handshake failed"));
+        }
+    }
     
-    // 3. Setup Channel for Mixed Events
+    // 4. Setup Channel for Mixed Events
     let (tx, mut rx) = mpsc::channel::<Frame>(100);
 
     // 5. Spawn Read Loop in Background
     let event_tx_read = event_tx.clone();
     let sink_read = sink.clone();
+    let tx_read = tx.clone();
     tokio::spawn(async move {
-        read_frame_loop(recv, event_tx_read, sink_read).await;
+        read_frame_loop(recv, event_tx_read, sink_read, tx_read).await;
     });
 
     // 6. Start Clipboard Listener
@@ -67,7 +87,24 @@ pub async fn run_client_session(
     }))?;
     log_info!(&event_tx, "Local clipboard synchronization active.");
 
-    // 7. Main Outbound Loop
+    // 7. Start Heartbeat Task
+    let tx_hb = tx.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            let hb = Frame::Heartbeat(Heartbeat {
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            });
+            if let Err(_) = tx_hb.send(hb).await {
+                break;
+            }
+        }
+    });
+
+    // 8. Main Outbound Loop
     loop {
         tokio::select! {
             // Priority 1: Commands from UI/CLI
@@ -81,7 +118,7 @@ pub async fn run_client_session(
                     SessionCommand::Disconnect => break,
                 }
             }
-            // Priority 2: Outbound Frames (Clipboard, etc.)
+            // Priority 2: Outbound Frames (Clipboard, Heartbeat, etc.)
             Some(frame) = rx.recv() => {
                 if let Err(e) = write_frame(&mut send, &frame).await {
                     log_error!(&event_tx, "Failed to send frame: {}", e);
@@ -147,7 +184,8 @@ async fn perform_file_send(
 async fn read_frame_loop(
     mut recv: quinn::RecvStream, 
     event_tx: Sender<SessionEvent>, 
-    sink: Arc<DefaultInputSink>
+    sink: Arc<DefaultInputSink>,
+    tx_outbound: mpsc::Sender<Frame>,
 ) {
     log_debug!(&event_tx, "Starting frame read loop");
     loop {
@@ -163,6 +201,10 @@ async fn read_frame_loop(
                  if let Err(e) = clip.set_text(text) {
                      log_error!(&event_tx, "Fatal: Clipboard update failed: {}", e);
                  }
+             }
+             Ok(Some(Frame::Heartbeat(hb))) => {
+                 // Respond to heartbeat
+                 let _ = tx_outbound.send(Frame::Heartbeat(hb)).await;
              }
              Ok(Some(_)) => {
                  log_debug!(&event_tx, "Received unknown frame type from server.");

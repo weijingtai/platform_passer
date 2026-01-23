@@ -1,7 +1,7 @@
-use crate::events::{SessionEvent, LogLevel};
-use crate::{log_info, log_error, log_debug, log_warn};
+use crate::events::SessionEvent;
+use crate::{log_info, log_error, log_debug};
 use anyhow::Result;
-use platform_passer_core::{Frame, InputEvent, ClipboardEvent, FileTransferResponse, write_frame, read_frame};
+use platform_passer_core::{Frame, InputEvent, ClipboardEvent, Handshake, FileTransferResponse, write_frame, read_frame};
 use platform_passer_transport::{generate_self_signed_cert, make_server_endpoint};
 use platform_passer_input::{InputSource, DefaultInputSource};
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
@@ -62,7 +62,7 @@ async fn handle_connection(
         }
     };
     
-    log_info!(&event_tx, "Handshake completed with {}", remote_addr);
+    log_info!(&event_tx, "QUIC Handshake completed with {}", remote_addr);
     let _ = event_tx.send(SessionEvent::Connected(remote_addr.to_string())).await;
     
     let clip = DefaultClipboard::new();
@@ -70,7 +70,26 @@ async fn handle_connection(
     // Allow client to open a bi-directional stream
     log_debug!(&event_tx, "Awaiting bi-directional protocol stream from {}", remote_addr);
     while let Ok((mut send, mut recv)) = connection.accept_bi().await {
-        log_debug!(&event_tx, "New protocol stream accepted from {}", remote_addr);
+        log_debug!(&event_tx, "New protocol stream accepted from {}. Performing application handshake...", remote_addr);
+        
+        // Protocol Handshake
+        match read_frame(&mut recv).await? {
+            Some(Frame::Handshake(h)) => {
+                log_info!(&event_tx, "Received handshake from {} (Client: {})", remote_addr, h.client_id);
+                // Send our handshake back
+                let resp = Frame::Handshake(Handshake {
+                    version: 1,
+                    client_id: "macos-server".to_string(),
+                    capabilities: vec!["input".to_string(), "clipboard".to_string(), "file-transfer".to_string()],
+                });
+                write_frame(&mut send, &resp).await?;
+            }
+            _ => {
+                log_error!(&event_tx, "Application handshake failed with {}", remote_addr);
+                break;
+            }
+        }
+
         let connection_clone = connection.clone();
         let event_tx_loop = event_tx.clone();
 
@@ -84,6 +103,10 @@ async fn handle_connection(
                             if let Err(e) = clip.set_text(text) {
                                log_error!(&event_tx_loop, "Failed to set clipboard: {}", e);
                             }
+                        }
+                        Ok(Some(Frame::Heartbeat(hb))) => {
+                            // Echo back heartbeats
+                            let _ = write_frame(&mut send, &Frame::Heartbeat(hb)).await;
                         }
                         Ok(Some(Frame::FileTransferRequest(req))) => {
                             log_info!(&event_tx_loop, "Incoming file request: {} ({} bytes)", req.filename, req.file_size);
@@ -131,11 +154,11 @@ async fn handle_connection(
                         Ok(Some(_)) => {}
                         Ok(None) => {
                             log_info!(&event_tx_loop, "Protocol stream closed by {}", remote_addr);
-                            return Ok(());
+                            break;
                         }
                         Err(e) => {
                             log_error!(&event_tx_loop, "Protocol stream error from {}: {}", remote_addr, e);
-                            return Ok(());
+                            break;
                         }
                     }
                 }
