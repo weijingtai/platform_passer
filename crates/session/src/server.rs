@@ -174,7 +174,7 @@ async fn handle_connection(
                         log_info!(&event_tx_loop, "Switching focus to {:?}", side);
                     }
                     if let Err(e) = write_frame(&mut send, &Frame::Input(event)).await {
-                        let _ = log_error!(&event_tx_loop, "Failed to send input: {}", e);
+                        let _ = log_error!(&event_tx_loop, "Failed to send input to client: {}. Breaking session.", e);
                         break;
                     }
                 }
@@ -182,7 +182,8 @@ async fn handle_connection(
         }
     }
     
-    let _ = log_info!(&event_tx, "Server connection terminated.");
+    let _ = log_info!(&event_tx, "Server connection terminated. Resetting focus to Local.");
+    DefaultInputSource::set_remote(false);
     let _ = event_tx.send(SessionEvent::Disconnected).await;
     Ok(())
 }

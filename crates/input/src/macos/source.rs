@@ -11,10 +11,13 @@ extern "C" {
     fn CGEventTapEnable(tap: *mut std::ffi::c_void, enable: bool);
 }
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 
 static IS_REMOTE: AtomicBool = AtomicBool::new(false);
+static PRESSED_BUTTONS: AtomicU8 = AtomicU8::new(0); // Bitmask: 1=Left, 2=Right, 4=Middle
+static LAST_SWITCH_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 static VIRTUAL_CURSOR: Mutex<(f32, f32)> = Mutex::new((0.0, 0.0));
 static DISPLAY_CACHE: Mutex<Option<(f32, f32)>> = Mutex::new(None);
 
@@ -30,7 +33,13 @@ impl MacosInputSource {
     }
 
     pub fn set_remote(remote: bool) {
-        IS_REMOTE.store(remote, Ordering::SeqCst);
+        let old = IS_REMOTE.swap(remote, Ordering::SeqCst);
+        if old && !remote {
+            // Transition from Remote to Local: Start cooling period
+            if let Ok(mut lock) = LAST_SWITCH_TIME.lock() {
+                *lock = Some(Instant::now());
+            }
+        }
     }
 }
 
@@ -87,17 +96,15 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             let point = event.location();
             
             // Normalize absolute position
-            let abs_x = (point.x as f32 / max_width);
-            let abs_y = (point.y as f32 / max_height);
+            let abs_x = point.x as f32 / max_width;
+            let abs_y = point.y as f32 / max_height;
 
             // Decision variables
             let mut check_x = abs_x;
 
             if is_remote {
-                // In Remote mode, the OS cursor is frozen. We must use deltas.
-                use core_graphics::event::{kCGMouseEventDeltaX, kCGMouseEventDeltaY};
-                let delta_x = event.get_double_value_field(kCGMouseEventDeltaX) as f32;
-                let delta_y = event.get_double_value_field(kCGMouseEventDeltaY) as f32;
+                let delta_x = event.get_double_value_field(4) as f32; // kCGMouseEventDeltaX = 4
+                let delta_y = event.get_double_value_field(5) as f32; // kCGMouseEventDeltaY = 5
                 
                 // Panic-safe lock acquisition
                 if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
@@ -137,7 +144,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             // Edge detection for Client -> Server switch
             // Return when virtual cursor hits the RIGHT edge of Windows
             if check_x >= 0.995 && is_remote {
-                IS_REMOTE.store(false, Ordering::SeqCst);
+                MacosInputSource::set_remote(false);
                 show_notification("Returned to Local Control");
                 tracing::info!("InputSource: Returned to Local Control (Windows Right Edge -> Left Edge)");
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
@@ -160,13 +167,25 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
         CGEventType::LeftMouseDown | CGEventType::LeftMouseUp |
         CGEventType::RightMouseDown | CGEventType::RightMouseUp |
         CGEventType::OtherMouseDown | CGEventType::OtherMouseUp => {
-            if !is_remote { return None; }
-            let button = match etype {
-                CGEventType::LeftMouseDown | CGEventType::LeftMouseUp => platform_passer_core::MouseButton::Left,
-                CGEventType::RightMouseDown | CGEventType::RightMouseUp => platform_passer_core::MouseButton::Right,
-                _ => platform_passer_core::MouseButton::Middle,
+            let button_bit = match etype {
+                CGEventType::LeftMouseDown | CGEventType::LeftMouseUp => 1,
+                CGEventType::RightMouseDown | CGEventType::RightMouseUp => 2,
+                _ => 4,
             };
             let is_down = matches!(etype, CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown);
+            
+            if is_down {
+                PRESSED_BUTTONS.fetch_or(button_bit, Ordering::SeqCst);
+            } else {
+                PRESSED_BUTTONS.fetch_and(!button_bit, Ordering::SeqCst);
+            }
+
+            if !is_remote { return None; }
+            let button = match button_bit {
+                1 => platform_passer_core::MouseButton::Left,
+                2 => platform_passer_core::MouseButton::Right,
+                _ => platform_passer_core::MouseButton::Middle,
+            };
             tracing::info!("InputSource: Mouse Button {:?} {}", button, if is_down { "Down" } else { "Up" });
             Some(InputEvent::MouseButton { button, is_down })
         }
@@ -176,7 +195,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             // Check for hotkey to return to local (e.g., Command + Escape)
             // Allow this even if remote (it's the escape hatch)
             if is_remote && key_code == 53 { // Escape
-                 IS_REMOTE.store(false, Ordering::SeqCst);
+                 MacosInputSource::set_remote(false);
                  show_notification("Returned to Local Control (Escape)");
                  tracing::info!("InputSource: Returned to Local Control (Escape)");
                  return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
@@ -218,6 +237,24 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
 
 impl InputSource for MacosInputSource {
     fn start_capture(&self, callback_fn: Box<dyn Fn(InputEvent) + Send + Sync>) -> Result<()> {
+        // Check permissions before starting
+        if !crate::macos::permissions::check_accessibility_trusted() {
+            tracing::warn!("InputSource: Accessibility permissions missing. Triggering system dialog...");
+            crate::macos::permissions::ensure_accessibility_permissions();
+            return Err(anyhow!("Accessibility permissions required. Please enable in System Settings."));
+        }
+
+        if !crate::macos::permissions::check_input_monitoring_enabled() {
+             tracing::warn!("InputSource: Input Monitoring permissions likely missing.");
+             // Note: There is no easy way to trigger Input Monitoring dialog programmatically 
+             // like Accessibility, so we just log the warning and instructions.
+             crate::macos::permissions::open_system_settings_input_monitoring();
+        }
+
+        // Log monitor dimensions for DPI verification
+        let (w, h) = get_display_bounds();
+        tracing::info!("InputSource: Starting capture. Primary display/workspace bounds: {}x{}", w, h);
+
         let callback_arc = Arc::new(callback_fn);
         
         // Store the raw pointer to the tap's MachPort so we can re-enable it from within the callback
@@ -246,15 +283,12 @@ impl InputSource for MacosInputSource {
                     CGEventType::FlagsChanged,
                     CGEventType::ScrollWheel,
                 ],
-                move |proxy, etype, event| {
+                move |_proxy, etype, event| {
                     match etype {
                         CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
                             println!("WARNING: CGEventTap disabled. Re-enabling...");
                             
-                            // Try simpler proxy re-enable first
-                            proxy.enable();
-                            
-                            // Fallback to raw port re-enable if proxy doesn't suffice (redundant but safe)
+                            // Use raw port re-enable using the stored tap pointer
                             let ptr_opt = tap_port_ptr_clone.lock().unwrap();
                             if let Some(ptr) = *ptr_opt {
                                 unsafe {
@@ -265,19 +299,44 @@ impl InputSource for MacosInputSource {
                             None
                         }
                         _ => {
+                            let was_remote_initially = IS_REMOTE.load(Ordering::SeqCst);
+
                             // Process event logic (extraction, sending to client)
                             if let Some(ev) = handle_event(etype, event) {
                                 callback_arc(ev);
                             }
                             
-                            // Input Swallowing / Suppression Logic
-                            let is_remote = IS_REMOTE.load(Ordering::SeqCst);
+                            let is_remote_now = IS_REMOTE.load(Ordering::SeqCst);
                             
-                            if is_remote {
-                                // Swallow event locally
+                            // Multi-layer Protection Logic:
+                            // 1. We are currently remote (is_remote_now).
+                            // 2. We WERE remote but just switched (was_remote_initially && !is_remote_now).
+                            // 3. We are local, but buttons are still physically pressed down from remote mode (button latching).
+                            // 4. We are local, but within the 300ms "Landing Zone" cooling period.
+                            
+                            let buttons_pressed = PRESSED_BUTTONS.load(Ordering::SeqCst) != 0;
+                            let in_cooling = if let Ok(lock) = LAST_SWITCH_TIME.lock() {
+                                lock.map_or(false, |t| t.elapsed().as_millis() < 300)
+                            } else { false };
+
+                            if is_remote_now {
+                                // Steady Remote: Swallow everything
                                 None
+                            } else if was_remote_initially || buttons_pressed || in_cooling {
+                                // Transitioning or Protected period
+                                match etype {
+                                    CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
+                                        // Allow moves so cursor can "land" and user can see where it is
+                                        Some(event.to_owned())
+                                    }
+                                    _ => {
+                                        // Swallow everything else (Clicks, Keys, Scroll)
+                                        // This prevents "MouseDown on Remote" -> "EOF/Switch" -> "MouseUp on Local" leakage.
+                                        None
+                                    }
+                                }
                             } else {
-                                // Local mode: Pass event through to OS
+                                // Steady Local
                                 Some(event.to_owned())
                             }
                         }
