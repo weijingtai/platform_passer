@@ -34,13 +34,17 @@ impl MacosInputSource {
     }
 
     pub fn set_remote(remote: bool) {
+        println!("InputSource: [DEBUG] set_remote({}) called", remote);
         let old = IS_REMOTE.swap(remote, Ordering::SeqCst);
         
         // 1. CoreGraphics Cursor Association (The "Freeze" API)
         unsafe {
             // true = cursor moves with mouse (Local)
             // false = cursor decoupled (Remote)
-            let _ = CGAssociateMouseAndMouseCursorPosition(!remote);
+            let result = CGAssociateMouseAndMouseCursorPosition(!remote);
+            if result != 0 {
+                println!("InputSource: [ERROR] CGAssociateMouseAndMouseCursorPosition failed with error: {}", result);
+            }
         }
 
         if old && !remote {
@@ -323,10 +327,25 @@ impl InputSource for MacosInputSource {
                             } else { false };
 
                             let result = if is_remote_now {
-                                // Steady Remote: Swallow EVERYTHING by converting to Null
-                                // This effectively freezes the local cursor and ignores keystrokes
-                                event.set_type(CGEventType::Null);
-                                Some(event.to_owned())
+                                // Steady Remote
+                                match etype {
+                                    CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged => {
+                                        // Keyboard: Convert to Null (Swallow hack for macOS security)
+                                        event.set_type(CGEventType::Null);
+                                        Some(event.to_owned())
+                                    }
+                                    CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
+                                        // Mouse Move: PASS IT.
+                                        // We rely on `CGAssociateMouseAndMouseCursorPosition(false)` to keep the cursor frozen.
+                                        // If we swallow it, sometimes the OS gets confused or the tap times out?
+                                        // Passing it is safer for stability, and `CGAssociate` handles the visual freeze.
+                                        Some(event.to_owned())
+                                    }
+                                    _ => {
+                                        // Clicks/Scrolls: Swallow to prevent interacting with local UI
+                                        None
+                                    }
+                                }
                             } else if was_remote_initially || buttons_pressed || in_cooling {
                                 // Transitioning or Protected period
                                 match etype {
