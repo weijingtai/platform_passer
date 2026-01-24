@@ -25,6 +25,39 @@ impl MacosInputSource {
     }
 }
 
+// Optimization: Refresh display bounds only when needed, not on every mouse tick.
+fn get_display_bounds() -> (f32, f32) {
+    if let Ok(guard) = DISPLAY_CACHE.lock() {
+        if let Some(bounds) = *guard {
+            return bounds;
+        }
+    }
+
+    unsafe {
+        let mut max_width = 0.0;
+        let mut max_height = 0.0;
+        let mut display_count: u32 = 0;
+        let mut displays = [0u32; 16];
+        if core_graphics::display::CGGetActiveDisplayList(16, displays.as_mut_ptr(), &mut display_count) == 0 {
+            for i in 0..display_count {
+                let bounds = core_graphics::display::CGDisplayBounds(displays[i as usize]);
+                let right = bounds.origin.x + bounds.size.width;
+                let bottom = bounds.origin.y + bounds.size.height;
+                if right > max_width { max_width = right; }
+                if bottom > max_height { max_height = bottom; }
+            }
+        }
+        
+        if max_width > 1.0 && max_height > 1.0 {
+            if let Ok(mut guard) = DISPLAY_CACHE.lock() {
+                *guard = Some((max_width as f32, max_height as f32));
+            }
+            (max_width as f32, max_height as f32)
+        } else {
+            (1920.0, 1080.0) // Fallback
+        }
+    }
+}
 
 // fn show_notification(text: &str) {
 //     let t = text.to_string();
@@ -42,97 +75,82 @@ fn show_notification(_text: &str) {
 
 fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
     let is_remote = IS_REMOTE.load(Ordering::SeqCst);
+    let (max_width, max_height) = get_display_bounds();
     // println!("DEBUG: Event {:?}, Remote: {}", etype, is_remote); // Too verbose?
 
     match etype {
         CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
             let point = event.location();
-            unsafe {
-                // Multi-monitor coordinate calculation
-                let mut max_width = 0.0;
-                let mut max_height = 0.0;
+            
+            // Normalize absolute position
+            let abs_x = (point.x as f32 / max_width);
+            let abs_y = (point.y as f32 / max_height);
+
+            // Decision variables
+            let mut check_x = abs_x;
+
+            if is_remote {
+                // In Remote mode, the OS cursor is frozen. We must use deltas.
+                use core_graphics::event::{kCGMouseEventDeltaX, kCGMouseEventDeltaY};
+                let delta_x = event.get_double_value_field(kCGMouseEventDeltaX) as f32;
+                let delta_y = event.get_double_value_field(kCGMouseEventDeltaY) as f32;
                 
-                let mut display_count: u32 = 0;
-                let mut displays = [0u32; 16];
-                if core_graphics::display::CGGetActiveDisplayList(16, displays.as_mut_ptr(), &mut display_count) == 0 {
-                    for i in 0..display_count {
-                        let bounds = core_graphics::display::CGDisplayBounds(displays[i as usize]);
-                        let right = bounds.origin.x + bounds.size.width;
-                        let bottom = bounds.origin.y + bounds.size.height;
-                        if right > max_width { max_width = right; }
-                        if bottom > max_height { max_height = bottom; }
-                    }
+                // Panic-safe lock acquisition
+                if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
+                    // Update virtual coords (normalized)
+                    vc.0 += delta_x / max_width; 
+                    vc.1 += delta_y / max_height;
+                    
+                    // Clamp
+                    if vc.0 < 0.0 { vc.0 = 0.0; }
+                    if vc.0 > 1.0 { vc.0 = 1.0; }
+                    if vc.1 < 0.0 { vc.1 = 0.0; }
+                    if vc.1 > 1.0 { vc.1 = 1.0; }
+                    
+                    check_x = vc.0;
                 }
-
-                if max_width > 1.0 && max_height > 1.0 { // Ensure non-zero and reasonable size
-                    // Normalize absolute position
-                    let abs_x = (point.x / max_width) as f32;
-                    let abs_y = (point.y / max_height) as f32;
-
-                    // Decision variables
-                    let mut check_x = abs_x;
-
-                    if is_remote {
-                        // In Remote mode, the OS cursor is frozen. We must use deltas.
-                        let delta_x = event.get_double_value_field(kCGMouseEventDeltaX) as f32;
-                        
-                        // Panic-safe lock acquisition
-                        if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
-                            // Update virtual X (normalized)
-                            vc.0 += delta_x / max_width; 
-                            
-                            // Clamp
-                            if vc.0 < 0.0 { vc.0 = 0.0; }
-                            if vc.0 > 1.0 { vc.0 = 1.0; }
-                            
-                            check_x = vc.0;
-                        }
-                        // If lock fails (poisoned), we just stick with last check_x (which might be abs_x, risking glitch but not crash)
-                    } else {
-                        // Update virtual cursor to match physical when local
-                        if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
-                            *vc = (abs_x, abs_y);
-                        }
-                    }
-
-                    // Edge detection for Server -> Client switch (Windows is on LEFT)
-                    if check_x <= 0.005 && !is_remote {
-                        IS_REMOTE.store(true, Ordering::SeqCst);
-                        
-                        // Initialize Virtual Cursor at the RIGHT edge of Windows (0.999)
-                        if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
-                            *vc = (0.999, abs_y);
-                        }
-                        
-                        show_notification("Switched to Remote (Windows Left)");
-                        return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
-                    }
-                    
-                    // Edge detection for Client -> Server switch
-                    // Return when virtual cursor hits the RIGHT edge of Windows
-                    if check_x >= 0.995 && is_remote {
-                        IS_REMOTE.store(false, Ordering::SeqCst);
-                        show_notification("Returned to Local Control");
-                        return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
-                    }
-
-                    if !is_remote { return None; }
-
-                    let mut final_x = abs_x;
-                    let mut final_y = abs_y;
-                    
-                    if is_remote {
-                         if let Ok(vc) = VIRTUAL_CURSOR.lock() {
-                             final_x = vc.0;
-                             final_y = vc.1;
-                         }
-                    }
-
-                    Some(InputEvent::MouseMove { x: final_x, y: final_y })
-                } else {
-                    None
+                // If lock fails (poisoned), we just stick with last check_x (which might be abs_x, risking glitch but not crash)
+            } else {
+                // Update virtual cursor to match physical when local
+                if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
+                    *vc = (abs_x, abs_y);
                 }
             }
+
+            // Edge detection for Server -> Client switch (Windows is on LEFT)
+            if check_x <= 0.005 && !is_remote {
+                IS_REMOTE.store(true, Ordering::SeqCst);
+                
+                // Initialize Virtual Cursor at the RIGHT edge of Windows (0.999)
+                if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
+                    *vc = (0.999, abs_y);
+                }
+                
+                show_notification("Switched to Remote (Windows Left)");
+                return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
+            }
+            
+            // Edge detection for Client -> Server switch
+            // Return when virtual cursor hits the RIGHT edge of Windows
+            if check_x >= 0.995 && is_remote {
+                IS_REMOTE.store(false, Ordering::SeqCst);
+                show_notification("Returned to Local Control");
+                return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
+            }
+
+            if !is_remote { return None; }
+
+            let mut final_x = abs_x;
+            let mut final_y = abs_y;
+            
+            if is_remote {
+                 if let Ok(vc) = VIRTUAL_CURSOR.lock() {
+                     final_x = vc.0;
+                     final_y = vc.1;
+                 }
+            }
+
+            Some(InputEvent::MouseMove { x: final_x, y: final_y })
         }
         CGEventType::LeftMouseDown | CGEventType::LeftMouseUp |
         CGEventType::RightMouseDown | CGEventType::RightMouseUp |
@@ -215,9 +233,16 @@ impl InputSource for MacosInputSource {
                     CGEventType::FlagsChanged,
                     CGEventType::ScrollWheel,
                 ],
-                move |_proxy, etype, event| {
+                move |proxy, etype, event| {
                     match etype {
-                        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
+                        CGEventType::TapDisabledByTimeout => {
+                            println!("WARNING: CGEventTap disabled by timeout. Re-enabling...");
+                            proxy.enable();
+                            None
+                        }
+                        CGEventType::TapDisabledByUserInput => {
+                            println!("WARNING: CGEventTap disabled by user interaction. Re-enabling...");
+                            proxy.enable();
                             None
                         }
                         _ => {
