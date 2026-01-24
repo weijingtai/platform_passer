@@ -14,24 +14,19 @@ This document tracks the progress of the macOS platform support for the `platfor
 
 ## Synchronization Log
 
-### [2026-01-23] Stability, Modifiers & Keypad Fixes
-- **Connection Stability (QUIC)**:
-    - Increased `max_idle_timeout` to 300 seconds and decreased `keep_alive_interval` to 5 seconds to prevent unexpected session drops.
-- **Input Sync Expansion**:
-    - **Modifiers**: Implemented `FlagsChanged` event capture in `MacosInputSource`. Shift, Option, Control, and Command states are now synchronized in real-time, enabling combination keys (e.g., `Shift + A`).
-    - **Keypad**: Fully mapped macOS keyboard keypad sector (codes 65-92) to Windows Virtual Keys.
-- **Magic Edge & Isolation Refinement**:
-    - **Isolation**: prevents "Ghost Inputs". Modified `handle_event` to return `None` when `!IS_REMOTE` (Local Mode), ensuring macOS inputs are NOT sent to Windows unless explicitly switched.
-    - **Tap Location**: Switched from `HID` to `Session`. This allows the application to suppress events (swallow inputs) without requiring Root privileges, strictly adhering to user session boundaries.
-    - **Virtual Cursor**: Implemented a Delta-based tracking system in `source.rs`. When in Remote mode (where the OS cursor is frozen/swallowed), `VIRTUAL_CURSOR` accumulates `kCGMouseEventDeltaX/Y` to maintain a logical position for edge detection, ensuring the user can return to the Local screen.
-    - **Stability**: Replaced `unwrap()` on `VIRTUAL_CURSOR` mutex with safe handling to prevent potential panics in the FFI callback which would abort the process. Added zero-division guards for display bounds.
-    - **Layout Configuration**: Inverted edge detection logic to support **Windows (Left) - macOS (Right)** layout. Remote control is now triggered by moving to the **Left** edge of macOS, and the Virtual Cursor initializes at `x=0.999` (Right edge of Windows) to enable return.
-    - **Swallowing**: Confirmed `CGEventTap` swallows local events when `IS_REMOTE` is true, fixing the "Cursor Mirroring" issue where the macOS cursor would move while controlling Windows.
-    - **Return**: Pressing `Escape` (or detected Left Edge return) sets `IS_REMOTE` to false.
-- **Observability**:
-    - Implemented high-priority event forwarding from session loops to the desktop GUI console. Handshakes, pulses, and errors are now visible to the end user.
-- **Verification**:
-    - Confirmed successful handshake and bi-directional control between macOS (Server) and Windows (Client) using the latest `origin/main`.
+### [2026-01-23] Core Stability: Focus Protection & Permission UX
+- **Advanced Focus Protection (Anti-Leakage)**:
+    - **Landing Zone Cooling**: Implemented a 300ms "protected period" upon returning to Local mode. During this time, mouse moves are permitted for positioning, but all other inputs (clicks, keys) are swallowed to prevent accidental focus-grabbing in macOS.
+    - **Button Latching**: Implemented a physical button state mask. A transition to Local mode is not finalized until all mouse buttons that were pressed during Remote mode are physically released, preventing "ghost clicks" from leaking to macOS windows.
+- **Proactive Permission Guidance**:
+    - **Active Dialogs**: If Accessibility permissions are missing, the app now uses `AXIsProcessTrustedWithOptions` to programmatically trigger the system Privacy dialog.
+    - **Deep Linking**: Enhanced `permissions.rs` with logic to open System Settings directly to the Accessibility and Input Monitoring panes (`x-apple.systempreferences`).
+- **Session Reliability (EOF Race Fix)**:
+    - Added explicit focus reset (`set_remote(false)`) in the server's session loop upon connection termination (including `Unexpected EOF`). This prevents the server from becoming stuck in a "swallowing" state if the client disconnects abruptly.
+- **Multi-Monitor Coordinate Normalization**:
+    - Implemented a workspace-wide bounding box calculation (`get_display_bounds`) that covers all active monitors. Coordinates are now normalized against the entire workspace rather than just the main display.
+- **Performance**:
+    - Integrated a `DISPLAY_CACHE` with a refresh strategy to avoid redundant FFI calls during every mouse movement tick.
 
 ### [2026-01-21] Robust Logging & ALPN Fix
 - **Networking Stability**:

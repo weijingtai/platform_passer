@@ -21,19 +21,19 @@ This document outlines the tasks for the macOS developer to ensure parity with t
     - [x] Implement auto-reenable logic if the OS disables the tap.
 - [x] **MouseButton Support**:
     - [x] Capture `Left/Right/Middle` clicks and forward them.
-- [ ] **Multi-Monitor Support**:
-    - [ ] Handle coordinates across multiple displays (currently only main display).
+- [x] **Multi-Monitor Support**:
+    - [x] Handle coordinates across multiple displays (implemented workspace-wide normalization).
 
 ### 3. Synchronization Logic (Magic Edge) <!-- id: mac_sync -->
 - [/] **Screen Focus Switching**:
     - [x] Implement **Right Edge** detection to switch to Windows (Remote).
     - [x] Implement **Left Edge** detection (via `ScreenSwitch::Local`) to return from Windows.
     - [x] Implement **Escape** hotkey as a fail-safe to return focus to macOS locally.
-    - [ ] **Hardware Verification**: Verify edge transitions feel "smooth" and don't trigger accidentally.
+    - [x] **Hardware Verification**: Verify edge transitions feel "smooth" and don't trigger accidentally.
 - [x] **Event Swallowing (Mirroring Fix)**:
     - [x] Ensure `CGEventTap` returns `NULL` when `IS_REMOTE` is true (Remote Mode).
     - [x] **Strict Isolation**: Ensure `CGEventTap` returns `NULL` for outbound events when `!IS_REMOTE` (Local Mode), preventing leakage to Windows.
-    - [ ] **Verification**: Move mouse on macOS (Local) and ensure Windows cursor does NOT move.
+    - [x] **Verification**: Move mouse on macOS (Local) and ensure Windows cursor does NOT move.
 
 ### 4. Input Mappings <!-- id: mac_map -->
 - [/] **Key Mapping Implementation**:
@@ -43,7 +43,7 @@ This document outlines the tasks for the macOS developer to ensure parity with t
 - [ ] **Special Key Handling**:
     - [x] Initial mapping for macOS `Command` to Windows `Win` key.
     - [x] Initial mapping for macOS `Option` to Windows `Alt` key.
-    - [ ] **Hardware Verification**: Test "Shift + A", "Cmd + C", etc.
+    - [x] **Hardware Verification**: Test "Shift + A", "Cmd + C", etc.
 
 ### 5. Performance & Stability <!-- id: mac_perf -->
 - [x] **Connection Stability**:
@@ -55,8 +55,8 @@ This document outlines the tasks for the macOS developer to ensure parity with t
 ### 6. Permissions & UX <!-- id: mac_perms -->
 - [x] **Accessibility Check**:
     - [x] Create a utility to check if AXIsProcessTrusted() is true.
-- [ ] **Visual Feedback**:
-    - [ ] Show a native notification or menu bar state change when focus is remote.
+- [x] **Visual Feedback**:
+    - [x] Show a native notification or menu bar state change when focus is remote (Implemented native notifications).
 
 ### 7. Clipboard <!-- id: mac_clip -->
 - [x] **NSPasteboard Implementation**:
