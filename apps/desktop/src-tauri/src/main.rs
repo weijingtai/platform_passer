@@ -11,6 +11,7 @@ use platform_passer_session::logging::GuiLogLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use std::io::Write;
+use platform_passer_core::config::AppConfig;
 
 // Shared log sender for GUI updates
 struct LogState {
@@ -22,6 +23,60 @@ struct AppState {
     running: Arc<Mutex<bool>>,
     command_tx: Arc<Mutex<Option<mpsc::Sender<SessionCommand>>>>,
     log_tx: Arc<Mutex<Option<mpsc::Sender<SessionEvent>>>>,
+    config: Arc<Mutex<AppConfig>>,
+}
+
+#[command]
+fn get_config(state: State<AppState>) -> AppConfig {
+    state.config.lock().unwrap().clone()
+}
+
+#[command]
+fn save_config(config: AppConfig, state: State<AppState>) -> Result<(), String> {
+    *state.config.lock().unwrap() = config.clone();
+    
+    // Persist to disk
+    let config_path = get_config_path();
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    
+    let file = std::fs::File::create(config_path).map_err(|e| e.to_string())?;
+    serde_json::to_writer_pretty(file, &config).map_err(|e| e.to_string())?;
+    
+    // If session is running, switch config immediately
+    let tx_opt = state.command_tx.lock().unwrap();
+    if let Some(tx) = &*tx_opt {
+        let tx_clone = tx.clone();
+        let config_clone = config.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = tx_clone.send(SessionCommand::UpdateConfig(config_clone)).await;
+        });
+    }
+    
+    Ok(())
+}
+
+fn get_config_path() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    let base = PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string()));
+    #[cfg(not(target_os = "windows"))]
+    let base = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string())).join(".config");
+    
+    let mut path = base;
+    path.push("platform-passer");
+    path.push("config.json");
+    path
+}
+
+fn load_config() -> Option<AppConfig> {
+    let path = get_config_path();
+    if path.exists() {
+        let file = std::fs::File::open(path).ok()?;
+        serde_json::from_reader(file).ok()
+    } else {
+        None
+    }
 }
 
 #[command]
@@ -198,9 +253,10 @@ fn main() {
             running: Arc::new(Mutex::new(false)),
             command_tx: Arc::new(Mutex::new(None)),
             log_tx,
+            config: Arc::new(Mutex::new(load_config().unwrap_or_default())),
         })
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action, check_accessibility])
+        .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action, check_accessibility, get_config, save_config])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

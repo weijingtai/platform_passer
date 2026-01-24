@@ -83,8 +83,9 @@ pub async fn run_client_session(
                 // 3. Handshake
                 let handshake = Frame::Handshake(Handshake {
                     version: 1,
-                    client_id: "macos-client".to_string(),
+                    client_id: "macos-client".to_string(), // TODO: Make dynamic
                     capabilities: vec!["input".to_string(), "clipboard".to_string()],
+                    screen_info: None, // TODO: Pass real screen info
                 });
 
                 let mut handshake_success = false;
@@ -190,11 +191,24 @@ pub async fn run_client_session(
 
                             // C. User Command
                             Some(cmd) = cmd_rx.recv() => {
-                                if matches!(cmd, SessionCommand::Disconnect) {
-                                    log_info!(&event_tx, "Disconnecting...");
-                                    let _ = hb_stop_tx.send(()).await;
-                                    let _ = ws_sink.close().await;
-                                    return Ok(());
+                                match cmd {
+                                    SessionCommand::Disconnect => {
+                                        log_info!(&event_tx, "Disconnecting...");
+                                        let _ = hb_stop_tx.send(()).await;
+                                        let _ = ws_sink.close().await;
+                                        return Ok(());
+                                    },
+                                    SessionCommand::UpdateConfig(config) => {
+                                        log_info!(&event_tx, "Updating session configuration...");
+                                        // Update Sink and Source
+                                        if let Err(e) = sink.update_config(config.clone()) {
+                                            log_error!(&event_tx, "Failed to update sink config: {}", e);
+                                        }
+                                        if let Err(e) = source.update_config(config) {
+                                            log_error!(&event_tx, "Failed to update source config: {}", e);
+                                        }
+                                    },
+                                    _ => {} 
                                 }
                             }
                         }

@@ -1,6 +1,7 @@
 use crate::InputSource;
 use anyhow::Result;
-use platform_passer_core::InputEvent;
+use platform_passer_core::{InputEvent, ScreenSide};
+use platform_passer_core::config::{AppConfig, ScreenPosition};
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{LPARAM, WPARAM, LRESULT};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -18,6 +19,7 @@ static VIRTUAL_CURSOR: Mutex<(f32, f32)> = Mutex::new((0.0, 0.0));
 // Global callback storage
 type HookCallback = Box<dyn Fn(InputEvent) + Send + Sync>;
 static GLOBAL_CALLBACK: Mutex<Option<Arc<HookCallback>>> = Mutex::new(None);
+static GLOBAL_CONFIG: Mutex<Option<AppConfig>> = Mutex::new(None);
 static mut KEYBOARD_HOOK: HHOOK = HHOOK(0);
 static mut MOUSE_HOOK: HHOOK = HHOOK(0);
 
@@ -30,6 +32,50 @@ impl WindowsInputSource {
 
     pub fn set_remote(remote: bool) {
         IS_REMOTE.store(remote, Ordering::SeqCst);
+    }
+}
+
+impl InputSource for WindowsInputSource {
+    fn start_capture(&self, callback: Box<dyn Fn(InputEvent) + Send + Sync>) -> Result<()> {
+        // Set global callback
+        {
+            let mut guard = GLOBAL_CALLBACK.lock().unwrap();
+            *guard = Some(Arc::new(callback));
+        }
+
+        // Spawn thread for message loop
+        thread::spawn(|| unsafe {
+             let h_instance = windows::Win32::System::LibraryLoader::GetModuleHandleA(None).unwrap();
+
+             KEYBOARD_HOOK = SetWindowsHookExA(WH_KEYBOARD_LL, Some(keyboard_proc), h_instance, 0).unwrap();
+             MOUSE_HOOK = SetWindowsHookExA(WH_MOUSE_LL, Some(mouse_proc), h_instance, 0).unwrap();
+
+             let mut msg = Default::default();
+             while GetMessageA(&mut msg, None, 0, 0).into() {
+                 windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
+                 windows::Win32::UI::WindowsAndMessaging::DispatchMessageA(&msg);
+             }
+        });
+
+        Ok(())
+    }
+
+    fn stop_capture(&self) -> Result<()> {
+        unsafe {
+            if KEYBOARD_HOOK.0 != 0 {
+                UnhookWindowsHookEx(KEYBOARD_HOOK);
+            }
+            if MOUSE_HOOK.0 != 0 {
+                UnhookWindowsHookEx(MOUSE_HOOK);
+            }
+        }
+        Ok(())
+    }
+
+    fn update_config(&self, config: AppConfig) -> Result<()> {
+        let mut guard = GLOBAL_CONFIG.lock().unwrap();
+        *guard = Some(config);
+        Ok(())
     }
 }
 
@@ -80,42 +126,37 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
 
         match msg {
             WM_MOUSEMOVE => {
-                let mut check_x = abs_x;
-                
-                if is_remote {
-                    // In remote mode, accumulate deltas (Windows doesn't freeze cursor, but we bypass its effect)
-                    // Simplified: Windows hooks still get physical points.
-                    // For now, let's follow macOS style: if remote, use deltas.
-                    // But Windows hooks provide absolute points.
-                    // Handle edge detection to return
-                    if abs_x <= 0.002 { // Left edge of Windows (Assuming Mac is on LEFT of Win now? No, User said [Win][Mac])
-                        // User said: Windows is on LEFT, Mac is on RIGHT.
-                        // So: Right edge of Windows (1.0) -> Mac.
-                        // Left edge of Mac (0.0) -> Windows.
+                // Dynamic Edge Detection
+                if !is_remote {
+                    let mut trigger_remote = false;
+                    if let Ok(config_opt) = GLOBAL_CONFIG.lock() {
+                       if let Some(config) = &*config_opt {
+                           for remote in &config.topology.remotes {
+                               match remote.position {
+                                   ScreenPosition::Right => if abs_x >= 0.999 { trigger_remote = true; },
+                                   ScreenPosition::Left => if abs_x <= 0.001 { trigger_remote = true; },
+                                   ScreenPosition::Top => if abs_y <= 0.001 { trigger_remote = true; },
+                                   ScreenPosition::Bottom => if abs_y >= 0.999 { trigger_remote = true; },
+                               }
+                           }
+                       }
+                    }
+                    // Fallback default
+                    if GLOBAL_CONFIG.lock().unwrap().is_none() && abs_x >= 0.998 {
+                        trigger_remote = true;
+                    }
+
+                    if trigger_remote {
+                        IS_REMOTE.store(true, Ordering::SeqCst);
+                        is_remote = true;
+                        swallow = true;
+                        tracing::info!("InputSource: Switched to Remote");
+                        event = Some(InputEvent::ScreenSwitch(ScreenSide::Remote));
                     }
                 }
-
-                // Layout [Win][Mac]: 
-                // Windows Right Edge (>= 0.998) -> Switch to Remote (Mac)
-                if !is_remote && abs_x >= 0.998 {
-                    IS_REMOTE.store(true, Ordering::SeqCst);
-                    is_remote = true;
-                    swallow = true;
-                    tracing::info!("InputSource: [Win][Mac] -> Switched to Remote (Mac)");
-                    event = Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
-                }
                 
-                // If remote, we stay at the edge and "pull" from it? 
-                // Actually, let's keep it simple: if remote, we send normalizing move.
                 if is_remote {
-                    // Normalize as if we are on the Remote screen.
-                    // For now, let's just send the absolute position on THIS monitor scaled.
                     event = Some(InputEvent::MouseMove { x: abs_x, y: abs_y });
-                    
-                    // ESCAPE HATCH for Windows -> Mac return?
-                    // If we want to return: move to LEFT edge of Mac (which maps back to Windows RIGHT edge)
-                    // This logic is tricky without knowing Mac's absolute pos.
-                    // Let's assume Mac callback sends a ScreenSwitch(Local) back.
                 }
             }
             WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP => {
@@ -166,42 +207,3 @@ const WM_RBUTTONUP: u32 = 0x0205;
 const WM_MBUTTONDOWN: u32 = 0x0207;
 const WM_MBUTTONUP: u32 = 0x0208;
 
-impl InputSource for WindowsInputSource {
-    fn start_capture(&self, callback: Box<dyn Fn(InputEvent) + Send + Sync>) -> Result<()> {
-        // Set global callback
-        {
-            let mut guard = GLOBAL_CALLBACK.lock().unwrap();
-            *guard = Some(Arc::new(callback));
-        }
-
-        // Spawn thread for message loop
-        thread::spawn(|| unsafe {
-            // Note: In reality, hooks must be set in the thread that runs the loop.
-            // Simplified for skeletal implementation.
-             let h_instance = windows::Win32::System::LibraryLoader::GetModuleHandleA(None).unwrap();
-
-             KEYBOARD_HOOK = SetWindowsHookExA(WH_KEYBOARD_LL, Some(keyboard_proc), h_instance, 0).unwrap();
-             MOUSE_HOOK = SetWindowsHookExA(WH_MOUSE_LL, Some(mouse_proc), h_instance, 0).unwrap();
-
-             let mut msg = Default::default();
-             while GetMessageA(&mut msg, None, 0, 0).into() {
-                 windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
-                 windows::Win32::UI::WindowsAndMessaging::DispatchMessageA(&msg);
-             }
-        });
-
-        Ok(())
-    }
-
-    fn stop_capture(&self) -> Result<()> {
-        unsafe {
-            if KEYBOARD_HOOK.0 != 0 {
-                UnhookWindowsHookEx(KEYBOARD_HOOK);
-            }
-            if MOUSE_HOOK.0 != 0 {
-                UnhookWindowsHookEx(MOUSE_HOOK);
-            }
-        }
-        Ok(())
-    }
-}

@@ -68,6 +68,19 @@ This document outlines the tasks for the macOS developer to ensure parity with t
 
 ---
 
+## 🚀 Phase 2: UX & Topology (New)
+> Detailed Plan: [docs/macos/plan_phase2_ux.md](./plan_phase2_ux.md)
+
+### 8. Screen & Input
+- [ ] **Screen Info**: Implement `get_screen_info` (Resolution, DPI).
+- [ ] **Dynamic Topology**: Update `source.rs` to support configurable edges (Top/Bottom/Left/Right).
+- [ ] **Input Speed**: Testing speed multiplier on macOS Sink.
+
+### 9. Advanced Clipboard
+- [ ] **Image Support**: 
+    - [ ] `NSPasteboard` read/write PNG.
+
+
 ## 🤝 Synchronization Points
 - **Next Sync**: Feedback on modifier key reliability and edge detection sensitivity.
 - **Protocol Version**: 0.1.1
