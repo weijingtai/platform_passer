@@ -14,21 +14,19 @@ This document tracks the progress of the macOS platform support for the `platfor
 
 ## Synchronization Log
 
-### [2026-01-23] Screen Focus & Input Synchronization
-- **Screen Focus Switching (Magic Edge)**:
-    - Implemented edge detection in `MacosInputSource` (Server).
-    - **Trigger**: Moving mouse to the `Right` edge of the main screen now sets `IS_REMOTE` to true and sends a `ScreenSwitch` event.
-    - **Return**: Pressing `Escape` (or detected Left Edge return) sets `IS_REMOTE` to false.
-- **Input Swallowing**:
-    - `CGEventTap` updated to return `NULL` when `IS_REMOTE` is active, effectively hiding the cursor and preventing unintended actions on the macOS machine.
-- **Input Reliability & Mapping**:
-    - **Keyboard**: Implemented `macos_to_windows_vk` mapping in `keymap.rs`. macOS keys now translate correctly to Windows Virtual-Key codes (e.g., Backspace).
-    - **Mouse Buttons**: Added support for `Left/Right/Middle` mouse button capture in `handle_event`.
-- **UI Enhancements**:
-    - Integrated a real-time connection status indicator in the desktop GUI.
+### [2026-01-23] Stability, Modifiers & Keypad Fixes
+- **Connection Stability (QUIC)**:
+    - Increased `max_idle_timeout` to 300 seconds and decreased `keep_alive_interval` to 5 seconds to prevent unexpected session drops.
+- **Input Sync Expansion**:
+    - **Modifiers**: Implemented `FlagsChanged` event capture in `MacosInputSource`. Shift, Option, Control, and Command states are now synchronized in real-time, enabling combination keys (e.g., `Shift + A`).
+    - **Keypad**: Fully mapped macOS keyboard keypad sector (codes 65-92) to Windows Virtual Keys.
+- **Magic Edge Refinement**:
+    - Stabilized edge detection logic for switching between focus modes (`Local` <-> `Remote`).
+    - Fixed "Follow-Me" bug: `CGEventTap` now correctly swallows all mouse/keyboard events locally when in `Remote` mode.
+- **Observability**:
+    - Implemented high-priority event forwarding from session loops to the desktop GUI console. Handshakes, pulses, and errors are now visible to the end user.
 - **Verification**:
-    - Verified connectivity between macOS (Server) and Windows (Client).
-    - Confirmed mouse buttons and basic keyboard input are working as expected.
+    - Confirmed successful handshake and bi-directional control between macOS (Server) and Windows (Client) using the latest `origin/main`.
 
 ### [2026-01-21] Robust Logging & ALPN Fix
 - **Networking Stability**:
