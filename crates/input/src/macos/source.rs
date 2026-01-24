@@ -220,6 +220,10 @@ impl InputSource for MacosInputSource {
     fn start_capture(&self, callback_fn: Box<dyn Fn(InputEvent) + Send + Sync>) -> Result<()> {
         let callback_arc = Arc::new(callback_fn);
         
+        // Store the raw pointer to the tap's MachPort so we can re-enable it from within the callback
+        let tap_port_ptr: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
+        let tap_port_ptr_clone = tap_port_ptr.clone();
+
         let run_loop_shared = self.run_loop.clone();
 
         thread::spawn(move || {
@@ -246,7 +250,18 @@ impl InputSource for MacosInputSource {
                     match etype {
                         CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
                             println!("WARNING: CGEventTap disabled. Re-enabling...");
+                            
+                            // Try simpler proxy re-enable first
                             proxy.enable();
+                            
+                            // Fallback to raw port re-enable if proxy doesn't suffice (redundant but safe)
+                            let ptr_opt = tap_port_ptr_clone.lock().unwrap();
+                            if let Some(ptr) = *ptr_opt {
+                                unsafe {
+                                    let port_ref = ptr as *mut std::ffi::c_void;
+                                    CGEventTapEnable(port_ref as _, true);
+                                }
+                            }
                             None
                         }
                         _ => {
@@ -268,10 +283,14 @@ impl InputSource for MacosInputSource {
                         }
                     }
                 },
-            ).map_err(|e| {
-                println!("ERROR: Failed to create CGEventTap: {:?}", e); // Debug print
-                anyhow!("Failed to create event tap: {:?}", e)
-            })?;
+            ).map_err(|e| anyhow!("Failed to create event tap: {:?}", e))?;
+
+            // Store the MachPort pointer
+            {
+                use core_foundation::base::TCFType;
+                let mut lock = tap_port_ptr.lock().unwrap();
+                *lock = Some(tap.mach_port.as_concrete_TypeRef() as usize);
+            }
 
             let loop_source = tap.mach_port.create_runloop_source(0).map_err(|_| anyhow!("Failed to create runloop source"))?;
             
