@@ -12,6 +12,7 @@ extern "C" {
     fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> u32;
     fn CGDisplayHideCursor(display: u32) -> u32;
     fn CGDisplayShowCursor(display: u32) -> u32;
+    fn CGWarpMouseCursorPosition(new_pos: core_graphics::geometry::CGPoint) -> u32;
     fn CGMainDisplayID() -> u32;
 }
 
@@ -40,12 +41,21 @@ impl MacosInputSource {
         println!("InputSource: [DEBUG] set_remote({}) called", remote);
         let old = IS_REMOTE.swap(remote, Ordering::SeqCst);
         
-        if old == remote {
-            return; // Idempotency check essential for Hide/Show counts
-        }
+        // REMOVED: Idempotency check caused failure to recover state
+        // if old == remote { return; }
 
         unsafe {
             let main_display = CGMainDisplayID();
+            
+            // 0. Warp to Center (Nuclear Option)
+            // Prevent immediate edge triggering or Hot Corner issues.
+            let (max_width, max_height) = get_display_bounds();
+            let center = core_graphics::geometry::CGPoint { 
+                x: (max_width / 2.0) as f64, 
+                y: (max_height / 2.0) as f64 
+            };
+            let _ = CGWarpMouseCursorPosition(center);
+
             // 1. CoreGraphics Cursor Association (The "Freeze" API)
             // true = cursor moves with mouse (Local)
             // false = cursor decoupled (Remote)
@@ -130,17 +140,27 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 let delta_x = event.get_double_value_field(4) as f32; // kCGMouseEventDeltaX = 4
                 let delta_y = event.get_double_value_field(5) as f32; // kCGMouseEventDeltaY = 5
                 
+                let mut ignore_delta = false;
+                if delta_x.abs() > 50.0 || delta_y.abs() > 50.0 {
+                     println!("InputSource: [DEBUG] Ignored massive delta ({}, {}) - likely warp artifact", delta_x, delta_y);
+                     ignore_delta = true;
+                }
+
                 if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
-                    // Update virtual coords (normalized)
-                    vc.0 += delta_x / max_width; 
-                    vc.1 += delta_y / max_height;
+                    if !ignore_delta {
+                        // Update virtual coords (normalized)
+                        vc.0 += delta_x / max_width; 
+                        vc.1 += delta_y / max_height;
+                        
+                        // Clamp
+                        if vc.0 < 0.0 { vc.0 = 0.0; }
+                        if vc.0 > 1.0 { vc.0 = 1.0; }
+                        if vc.1 < 0.0 { vc.1 = 0.0; }
+                        if vc.1 > 1.0 { vc.1 = 1.0; }
+                    }
                     
-                    // Clamp
-                    if vc.0 < 0.0 { vc.0 = 0.0; }
-                    if vc.0 > 1.0 { vc.0 = 1.0; }
-                    if vc.1 < 0.0 { vc.1 = 0.0; }
-                    if vc.1 > 1.0 { vc.1 = 1.0; }
-                    
+                    // CRITICAL: Always use Virtual Cursor position for edge checks when Remote.
+                    // This prevents physical cursor movement (due to warp or leaks) from triggering accidental exits.
                     check_x = vc.0;
                 }
             }
@@ -345,19 +365,38 @@ impl InputSource for MacosInputSource {
                                 // Steady Remote
                                 match etype {
                                     CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged => {
-                                        // Keyboard: Convert to Null (Swallow hack for macOS security)
+                                        // Keyboard: Convert to Null
                                         event.set_type(CGEventType::Null);
                                         Some(event.to_owned())
                                     }
                                     CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
-                                        // Mouse Move: PASS IT so OS sees activity.
-                                        // CRITICAL: We rely on `set_remote` to handle Freeze/Hide.
-                                        // Do NOT reinfore here as high-frequency calls cause stability issues.
+                                        // Movement: WARP-LOCK
+                                        // CGAssociate is unreliable. We must physically hold the cursor in place.
+                                        let (max_width, max_height) = get_display_bounds();
+                                        let center = core_graphics::geometry::CGPoint { 
+                                            x: (max_width / 2.0) as f64, 
+                                            y: (max_height / 2.0) as f64 
+                                        };
+                                        unsafe {
+                                            let _ = CGWarpMouseCursorPosition(center);
+                                        }
+
+                                        // Swallow the event (None) since we are warping.
+                                        // We don't need the OS to process the move.
+                                        None
+                                    }
+                                    CGEventType::LeftMouseDown | CGEventType::LeftMouseUp |
+                                    CGEventType::RightMouseDown | CGEventType::RightMouseUp |
+                                    CGEventType::OtherMouseDown | CGEventType::OtherMouseUp |
+                                    CGEventType::ScrollWheel => {
+                                        // Clicks/Scrolls: Convert to Null
+                                        event.set_type(CGEventType::Null);
                                         Some(event.to_owned())
                                     }
                                     _ => {
-                                        // Clicks/Scrolls: Swallow
-                                        None
+                                        // Anything else: safe to drop? Or Null?
+                                        event.set_type(CGEventType::Null);
+                                        Some(event.to_owned())
                                     }
                                 }
                             } else if was_remote_initially || buttons_pressed || in_cooling {
