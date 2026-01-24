@@ -29,9 +29,29 @@ enum Commands {
     },
 }
 
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    // Ensure the debug directory exists
+    let log_dir = PathBuf::from("docs/macos/debug");
+    std::fs::create_dir_all(&log_dir)?;
+    let log_path = log_dir.join("latest.log");
+
+    // Create a file writer that truncates (overwrites)
+    let file = std::fs::File::create(&log_path)?;
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file);
+
+    // Set up the subscriber with two layers: stdout and file
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false) // Disable colors for file log
+        )
+        .init();
+
     let cli = Cli::parse();
 
     match cli.command {

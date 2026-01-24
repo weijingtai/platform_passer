@@ -1,0 +1,7 @@
+2026-01-24T02:07:10.811830Z  INFO platform_passer_session::logging: Starting server session on 0.0.0.0:4433
+2026-01-24T02:07:10.812023Z  INFO platform_passer_cli: Starting server session on 0.0.0.0:4433
+2026-01-24T02:07:10.812969Z DEBUG platform_passer_transport::server: Creating server endpoint on 0.0.0.0:4433
+2026-01-24T02:07:10.813567Z DEBUG platform_passer_transport::server: Server ALPN protocols set to: [[112, 112, 47, 49]]
+2026-01-24T02:07:10.814023Z  INFO platform_passer_transport::server: Server endpoint created successfully on 0.0.0.0:4433
+2026-01-24T02:07:10.814033Z  INFO platform_passer_session::logging: QUIC Server listening on 0.0.0.0:4433
+2026-01-24T02:07:10.814126Z  INFO platform_passer_cli: QUIC Server listening on 0.0.0.0:4433
