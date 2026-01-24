@@ -7,12 +7,20 @@ use tokio::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 
+use platform_passer_session::logging::GuiLogLayer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+// Shared log sender for GUI updates
+struct LogState {
+    tx: Arc<Mutex<Option<mpsc::Sender<SessionEvent>>>>,
+}
+
 // Simple state to hold active session handle? 
-// For now we just fire and forget, but let's prevent multiple sessions.
 struct AppState {
-    // We only support one active session for now
     running: Arc<Mutex<bool>>,
     command_tx: Arc<Mutex<Option<mpsc::Sender<SessionCommand>>>>,
+    log_tx: Arc<Mutex<Option<mpsc::Sender<SessionEvent>>>>,
 }
 
 #[command]
@@ -42,10 +50,15 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
     *state.command_tx.lock().unwrap() = None;
 
     let running_clone = state.running.clone();
+    let log_tx_clone = state.log_tx.clone();
     
     // Spawn async task
     tauri::async_runtime::spawn(async move {
         let (tx, mut rx) = mpsc::channel(100);
+        
+        // Update global log forwarder
+        *log_tx_clone.lock().unwrap() = Some(tx.clone());
+
         let bind_addr: SocketAddr = format!("{}:{}", ip, port).parse().unwrap_or_else(|_| "0.0.0.0:4433".parse().unwrap());
         
         let _session_task = tokio::spawn(async move {
@@ -65,6 +78,7 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
         }
         
         *running_clone.lock().unwrap() = false;
+        *log_tx_clone.lock().unwrap() = None;
     });
 
     "Server starting...".to_string()
@@ -84,10 +98,14 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
     
     let running_clone = state.running.clone();
     let tx_clone = state.command_tx.clone();
+    let log_tx_clone = state.log_tx.clone();
 
     let ip_clone = ip.clone();
     tauri::async_runtime::spawn(async move {
         let (tx, mut rx) = mpsc::channel(100);
+        
+        // Update global log forwarder
+        *log_tx_clone.lock().unwrap() = Some(tx.clone());
         
         // Handle IPv6 brackets if needed, or simple concatenation
         let server_addr_str = format!("{}:{}", ip_clone, port);
@@ -110,6 +128,7 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
         }
         *running_clone.lock().unwrap() = false;
         *tx_clone.lock().unwrap() = None;
+        *log_tx_clone.lock().unwrap() = None;
     });
 
     format!("Connecting to {}:{}...", ip, port)
@@ -134,22 +153,24 @@ struct Payload {
 }
 
 fn main() {
-    let filter = if cfg!(debug_assertions) {
-        "debug,quinn=info,rustls=info"
-    } else {
-        "info"
-    };
+    let filter = "debug,quinn=debug,rustls=info"; // Force debug for now to help user
 
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new(
+    let log_tx = Arc::new(Mutex::new(None));
+    let gui_layer = GuiLogLayer { tx: log_tx.clone() };
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::EnvFilter::new(
             std::env::var("RUST_LOG").unwrap_or_else(|_| filter.into()),
         ))
+        .with(gui_layer)
         .init();
     
     tauri::Builder::default()
         .manage(AppState { 
             running: Arc::new(Mutex::new(false)),
             command_tx: Arc::new(Mutex::new(None)),
+            log_tx,
         })
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action, check_accessibility])

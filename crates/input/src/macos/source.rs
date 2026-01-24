@@ -8,7 +8,10 @@ use core_graphics::event::{CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOp
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use std::sync::Mutex;
+
 static IS_REMOTE: AtomicBool = AtomicBool::new(false);
+static VIRTUAL_CURSOR: Mutex<(f32, f32)> = Mutex::new((0.0, 0.0));
 
 pub struct MacosInputSource;
 
@@ -57,19 +60,47 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 }
 
                 if max_width > 0.0 && max_height > 0.0 {
-                    let x = (point.x / max_width) as f32;
-                    let y = (point.y / max_height) as f32;
+                    // Normalize absolute position
+                    let abs_x = (point.x / max_width) as f32;
+                    let abs_y = (point.y / max_height) as f32;
+
+                    // Decision variables
+                    let mut check_x = abs_x;
+                    // let mut check_y = abs_y; // Unused for now
+
+                    if is_remote {
+                        // In Remote mode, the OS cursor is frozen. We must use deltas to update our virtual cursor.
+                        let delta_x = event.get_double_value_field(kCGMouseEventDeltaX) as f32;
+                        // let delta_y = event.get_double_value_field(kCGMouseEventDeltaY) as f32; 
+                        
+                        let mut vc = VIRTUAL_CURSOR.lock().unwrap();
+                        
+                        // Update virtual X (normalized)
+                        // We scale delta by max_width to get normalized delta
+                        vc.0 += delta_x / max_width; 
+                        
+                        // Clamp
+                        if vc.0 < 0.0 { vc.0 = 0.0; }
+                        if vc.0 > 1.0 { vc.0 = 1.0; }
+                        
+                        check_x = vc.0;
+                    } else {
+                        // Update virtual cursor to match physical when local, so it's ready for the switch
+                        if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
+                            *vc = (abs_x, abs_y);
+                        }
+                    }
 
                     // Edge detection for Server -> Client switch
-                    if x >= 0.995 && !is_remote {
+                    if check_x >= 0.995 && !is_remote {
                         IS_REMOTE.store(true, Ordering::SeqCst);
-                        show_notification("Switched to Remote Control");
+                        show_notification("Switched to Remote Control"); // Keep notification
                         return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
                     }
                     
                     // Edge detection for Client -> Server switch
-                    // (Should usually come from client, but if cursor drifts back...)
-                    if x <= 0.005 && is_remote {
+                    // Use Check_X which is Virtual Cursor X when remote
+                    if check_x <= 0.005 && is_remote {
                         IS_REMOTE.store(false, Ordering::SeqCst);
                         show_notification("Returned to Local Control");
                         return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
@@ -77,7 +108,27 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
 
                     if !is_remote { return None; }
 
-                    Some(InputEvent::MouseMove { x, y })
+                    // Send the absolute (virtual) position if remote, or physical if not?
+                    // Actually protocol expects normalized coordinates.
+                    // If is_remote is true, we should probably send the virtual coordinates?
+                    // Or keep sending the physical ones? 
+                    // No, physical ones are stuck. We MUST send virtual coordinates if we want smooth movement on client
+                    // BUT the client might be expecting relative deltas? 
+                    // Let's stick to sending the MouseMove event. 
+                    // Wait, if we send 'x' and 'y' derived from 'point' (physical), they are static.
+                    // We should send 'vc.0' and 'vc.1'.
+                    
+                    let mut final_x = abs_x;
+                    let mut final_y = abs_y;
+                    
+                    if is_remote {
+                         if let Ok(vc) = VIRTUAL_CURSOR.lock() {
+                             final_x = vc.0;
+                             final_y = vc.1;
+                         }
+                    }
+
+                    Some(InputEvent::MouseMove { x: final_x, y: final_y })
                 } else {
                     None
                 }
