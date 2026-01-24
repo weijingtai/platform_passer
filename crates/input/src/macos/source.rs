@@ -38,14 +38,14 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                     let y = (point.y / bounds.size.height) as f32;
 
                     // Edge detection for Server -> Client switch
-                    if x >= 0.999 && !is_remote {
+                    if x >= 0.995 && !is_remote {
                         IS_REMOTE.store(true, Ordering::SeqCst);
                         return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
                     }
                     
                     // Edge detection for Client -> Server switch
                     // (Should usually come from client, but if cursor drifts back...)
-                    if x <= 0.001 && is_remote {
+                    if x <= 0.005 && is_remote {
                         IS_REMOTE.store(false, Ordering::SeqCst);
                         return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
                     }
@@ -121,7 +121,7 @@ impl InputSource for MacosInputSource {
         
         thread::spawn(move || {
             let tap = CGEventTap::new(
-                CGEventTapLocation::HID,
+                CGEventTapLocation::Session,
                 CGEventTapPlacement::HeadInsertEventTap,
                 CGEventTapOptions::Default,
                 vec![
