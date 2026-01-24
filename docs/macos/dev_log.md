@@ -24,6 +24,7 @@ This document tracks the progress of the macOS platform support for the `platfor
     - **Isolation**: prevents "Ghost Inputs". Modified `handle_event` to return `None` when `!IS_REMOTE` (Local Mode), ensuring macOS inputs are NOT sent to Windows unless explicitly switched.
     - **Tap Location**: Switched from `HID` to `Session`. This allows the application to suppress events (swallow inputs) without requiring Root privileges, strictly adhering to user session boundaries.
     - **Virtual Cursor**: Implemented a Delta-based tracking system in `source.rs`. When in Remote mode (where the OS cursor is frozen/swallowed), `VIRTUAL_CURSOR` accumulates `kCGMouseEventDeltaX/Y` to maintain a logical position for edge detection, ensuring the user can return to the Local screen.
+    - **Stability**: Replaced `unwrap()` on `VIRTUAL_CURSOR` mutex with safe handling to prevent potential panics in the FFI callback which would abort the process. Added zero-division guards for display bounds.
     - **Swallowing**: Confirmed `CGEventTap` swallows local events when `IS_REMOTE` is true, fixing the "Cursor Mirroring" issue where the macOS cursor would move while controlling Windows.
     - **Return**: Pressing `Escape` (or detected Left Edge return) sets `IS_REMOTE` to false.
 - **Observability**:

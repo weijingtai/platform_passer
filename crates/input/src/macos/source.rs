@@ -59,33 +59,32 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                     }
                 }
 
-                if max_width > 0.0 && max_height > 0.0 {
+                if max_width > 1.0 && max_height > 1.0 { // Ensure non-zero and reasonable size
                     // Normalize absolute position
                     let abs_x = (point.x / max_width) as f32;
                     let abs_y = (point.y / max_height) as f32;
 
                     // Decision variables
                     let mut check_x = abs_x;
-                    // let mut check_y = abs_y; // Unused for now
 
                     if is_remote {
-                        // In Remote mode, the OS cursor is frozen. We must use deltas to update our virtual cursor.
+                        // In Remote mode, the OS cursor is frozen. We must use deltas.
                         let delta_x = event.get_double_value_field(kCGMouseEventDeltaX) as f32;
-                        // let delta_y = event.get_double_value_field(kCGMouseEventDeltaY) as f32; 
                         
-                        let mut vc = VIRTUAL_CURSOR.lock().unwrap();
-                        
-                        // Update virtual X (normalized)
-                        // We scale delta by max_width to get normalized delta
-                        vc.0 += delta_x / max_width; 
-                        
-                        // Clamp
-                        if vc.0 < 0.0 { vc.0 = 0.0; }
-                        if vc.0 > 1.0 { vc.0 = 1.0; }
-                        
-                        check_x = vc.0;
+                        // Panic-safe lock acquisition
+                        if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
+                            // Update virtual X (normalized)
+                            vc.0 += delta_x / max_width; 
+                            
+                            // Clamp
+                            if vc.0 < 0.0 { vc.0 = 0.0; }
+                            if vc.0 > 1.0 { vc.0 = 1.0; }
+                            
+                            check_x = vc.0;
+                        }
+                        // If lock fails (poisoned), we just stick with last check_x (which might be abs_x, risking glitch but not crash)
                     } else {
-                        // Update virtual cursor to match physical when local, so it's ready for the switch
+                        // Update virtual cursor to match physical when local
                         if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
                             *vc = (abs_x, abs_y);
                         }
@@ -94,12 +93,11 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                     // Edge detection for Server -> Client switch
                     if check_x >= 0.995 && !is_remote {
                         IS_REMOTE.store(true, Ordering::SeqCst);
-                        show_notification("Switched to Remote Control"); // Keep notification
+                        show_notification("Switched to Remote Control");
                         return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
                     }
                     
                     // Edge detection for Client -> Server switch
-                    // Use Check_X which is Virtual Cursor X when remote
                     if check_x <= 0.005 && is_remote {
                         IS_REMOTE.store(false, Ordering::SeqCst);
                         show_notification("Returned to Local Control");
@@ -108,16 +106,6 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
 
                     if !is_remote { return None; }
 
-                    // Send the absolute (virtual) position if remote, or physical if not?
-                    // Actually protocol expects normalized coordinates.
-                    // If is_remote is true, we should probably send the virtual coordinates?
-                    // Or keep sending the physical ones? 
-                    // No, physical ones are stuck. We MUST send virtual coordinates if we want smooth movement on client
-                    // BUT the client might be expecting relative deltas? 
-                    // Let's stick to sending the MouseMove event. 
-                    // Wait, if we send 'x' and 'y' derived from 'point' (physical), they are static.
-                    // We should send 'vc.0' and 'vc.1'.
-                    
                     let mut final_x = abs_x;
                     let mut final_y = abs_y;
                     
