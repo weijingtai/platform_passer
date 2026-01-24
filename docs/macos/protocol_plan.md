@@ -2,18 +2,18 @@
 
 This document defines the communication protocol between the **Windows** and **macOS** nodes for the Platform Passer application.
 
-## 1. Transport Layer (QUIC)
+## 1. Transport Layer (WebSocket over TCP)
 
-### ALPN (Application-Layer Protocol Negotiation)
-Both client and server **MUST** use the following identifier:
-- **ID**: `pp/1`
-- **Hex**: `70 70 2f 31`
+The project has migrated from QUIC to **WebSocket** to improve connection reliability and simplify the protocol stack.
 
-### Connection Stability
-To prevent idle disconnections, the following QUIC parameters are enforced:
-- **Keep-Alive Interval**: 10 seconds.
-- **Max Idle Timeout**: 60 seconds.
-- **Handshake Timeout**: 20 seconds.
+### WebSocket Specification
+- **Implementation**: `tokio-tungstenite`
+- **Handshake**: Standard HTTP Upgrade to WebSocket.
+- **Framing**: Native WebSocket framing is used. Length headers are no longer required as WebSocket provides message-level framing.
+
+### Connection Parameters
+- **Idle Timeout**: Managed by TCP keep-alives and application-level heartbeats.
+- **Heartbeat Interval**: Enforced at 5 seconds.
 
 ---
 

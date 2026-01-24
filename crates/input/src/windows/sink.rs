@@ -68,7 +68,6 @@ impl InputSink for WindowsInputSink {
                 };
             }
             InputEvent::Scroll { dx, dy } => {
-                input.r#type = INPUT_MOUSE;
                 
                 // Vertical scroll
                 if dy.abs() > 0.0 {

@@ -2,17 +2,17 @@ use crate::events::SessionEvent;
 use crate::commands::SessionCommand;
 use crate::{log_info, log_error, log_debug, log_warn};
 use anyhow::Result;
-use platform_passer_core::{Frame, ClipboardEvent, FileTransferRequest, Handshake, Heartbeat, write_frame, read_frame};
-use platform_passer_transport::{make_client_endpoint};
+use platform_passer_core::{Frame, ClipboardEvent, Handshake, Heartbeat};
+use platform_passer_transport::{connect_ws};
 use platform_passer_input::{InputSink, DefaultInputSink};
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, Sender, Receiver};
-use tokio::fs::File;
 use std::time::Duration;
-
+use tokio_tungstenite::tungstenite::Message;
+use futures_util::{StreamExt, SinkExt};
 
 pub async fn run_client_session(
     server_addr: SocketAddr, 
@@ -20,244 +20,130 @@ pub async fn run_client_session(
     mut cmd_rx: Receiver<SessionCommand>,
     event_tx: Sender<SessionEvent>
 ) -> Result<()> {
-    log_info!(&event_tx, "Attempting connection to {}", server_addr);
+    log_info!(&event_tx, "Attempting WebSocket connection to {}", server_addr);
 
-    // 1. Setup QUIC Client
-    let endpoint = make_client_endpoint("0.0.0.0:0".parse()?)?;
-    log_debug!(&event_tx, "QUIC Client endpoint bound. Starting connection...");
-    let connection = match endpoint.connect(server_addr, "localhost")?.await {
-        Ok(c) => c,
-        Err(e) => {
-            log_error!(&event_tx, "QUIC Connection failed: {}", e);
-            let _ = event_tx.send(SessionEvent::Error(format!("Connection failed: {}", e))).await;
-            return Err(e.into());
-        }
-    };
-    
-    log_info!(&event_tx, "QUIC Connection established with {}", connection.remote_address());
-    let _ = event_tx.send(SessionEvent::Connected(connection.remote_address().to_string())).await;
+    // 1. Setup WebSocket Client
+    let ws_stream = connect_ws(server_addr).await?;
+    log_info!(&event_tx, "WebSocket connection established with {}", server_addr);
+    let _ = event_tx.send(SessionEvent::Connected(server_addr.to_string())).await;
 
-    // 2. Setup Input Sink (Client receives inputs and injects them)
+    let (mut ws_sink, mut ws_stream) = ws_stream.split();
+
+    // 2. Setup Input Sink
     let sink = Arc::new(DefaultInputSink::new());
-    log_debug!(&event_tx, "Local input sink initialized.");
-
-    let (mut send, mut recv) = connection.open_bi().await?;
-    log_debug!(&event_tx, "Main protocol stream opened successfully.");
 
     // 3. Perform Protocol Handshake
-    log_debug!(&event_tx, "Performing protocol handshake...");
+    log_debug!(&event_tx, "Performing application handshake...");
     let handshake = Frame::Handshake(Handshake {
         version: 1,
         client_id: "macos-client".to_string(),
-        capabilities: vec!["input".to_string(), "clipboard".to_string(), "file-transfer".to_string()],
+        capabilities: vec!["input".to_string(), "clipboard".to_string()],
     });
-    write_frame(&mut send, &handshake).await?;
-    match read_frame(&mut recv).await? {
-        Some(Frame::Handshake(_)) => {
-            log_info!(&event_tx, "Protocol handshake successful.");
+    ws_sink.send(Message::Binary(bincode::serialize(&handshake)?)).await?;
+    
+    match ws_stream.next().await {
+        Some(Ok(Message::Binary(bytes))) => {
+            let resp: Frame = bincode::deserialize(&bytes)?;
+            if matches!(resp, Frame::Handshake(_)) {
+                log_info!(&event_tx, "Protocol handshake successful.");
+            } else {
+                return Err(anyhow::anyhow!("Handshake failed: Invalid frame"));
+            }
         }
-        _ => {
-            log_error!(&event_tx, "Protocol handshake failed: Invalid response from server.");
-            return Err(anyhow::anyhow!("Handshake failed"));
-        }
+        _ => return Err(anyhow::anyhow!("Handshake failed: No response")),
     }
     
-    // 4. Setup Channel for Mixed Events
+    // 4. Setup Channel for Outbound
     let (tx, mut rx) = mpsc::channel::<Frame>(100);
 
     // 5. Spawn Read Loop in Background
     let event_tx_read = event_tx.clone();
     let sink_read = sink.clone();
     let tx_read = tx.clone();
-    let (err_tx, mut err_rx) = mpsc::channel::<()>(1);
     tokio::spawn(async move {
-        read_frame_loop(recv, event_tx_read, sink_read, tx_read).await;
-        let _ = err_tx.send(()).await;
+        while let Some(msg) = ws_stream.next().await {
+            match msg {
+                Ok(Message::Binary(bytes)) => {
+                    if let Ok(frame) = bincode::deserialize::<Frame>(&bytes) {
+                        match frame {
+                            Frame::Input(event) => {
+                                if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
+                                    log_info!(&event_tx_read, "Focus switched to {:?}", side);
+                                } else {
+                                    let _ = sink_read.inject_event(event);
+                                }
+                            }
+                            Frame::Clipboard(ClipboardEvent::Text(text)) => {
+                                log_info!(&event_tx_read, "Clipboard sync from server.");
+                                let _ = DefaultClipboard::new().set_text(text);
+                            }
+                            Frame::Heartbeat(hb) => {
+                                let _ = tx_read.send(Frame::Heartbeat(hb)).await;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(Message::Close(_)) => {
+                    log_info!(&event_tx_read, "Connection closed by server.");
+                    break;
+                }
+                Err(e) => {
+                    log_error!(&event_tx_read, "Read error: {}", e);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let _ = event_tx_read.send(SessionEvent::Disconnected).await;
     });
 
-    // 6. Start Clipboard Listener
-    let clip = DefaultClipboard::new();
-    let tx_clip = tx.clone();
-    let clip_reader = DefaultClipboard::new();
-    
-    clip.start_listener(Box::new(move || {
-        if let Ok(text) = clip_reader.get_text() {
-             if !text.is_empty() {
-                 let _ = tx_clip.blocking_send(Frame::Clipboard(ClipboardEvent::Text(text)));
-             }
-        }
-    }))?;
-    log_info!(&event_tx, "Local clipboard synchronization active.");
-
-    // 7. Start Heartbeat Task
+    // 6. Start Heartbeat Task
     let tx_hb = tx.clone();
-    let hb_tx_log = event_tx.clone();
     tokio::spawn(async move {
-        let mut count = 0;
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            count += 1;
             let hb = Frame::Heartbeat(Heartbeat {
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
+                timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
             });
-            if let Err(_) = tx_hb.send(hb).await {
-                let _ = log_debug!(&hb_tx_log, "Stopping heartbeat task due to channel closure.");
-                break;
-            }
-            if count % 6 == 0 {
-                let _ = log_debug!(&hb_tx_log, "Session active: Heartbeat pulse #{}", count);
-            }
+            if tx_hb.send(hb).await.is_err() { break; }
         }
     });
+
+    // 7. Clipboard Listener
+    let clip = DefaultClipboard::new();
+    let tx_clip = tx.clone();
+    clip.start_listener(Box::new(move || {
+        if let Ok(text) = DefaultClipboard::new().get_text() {
+            if !text.is_empty() {
+                let _ = tx_clip.blocking_send(Frame::Clipboard(ClipboardEvent::Text(text)));
+            }
+        }
+    }))?;
 
     // 8. Main Outbound Loop
     loop {
         tokio::select! {
-            // Priority 1: Commands from UI/CLI
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
-                    SessionCommand::SendFile(path) => {
-                         let _ = log_info!(&event_tx, "UI requested file send: {:?}", path);
-                         if let Err(e) = perform_file_send(&connection, path, &event_tx).await {
-                             let _ = event_tx.send(SessionEvent::Error(format!("File send error: {}", e))).await;
-                         }
-                    }
                     SessionCommand::Disconnect => {
-                         let _ = log_info!(&event_tx, "UI requested disconnection.");
-                         break;
+                        log_info!(&event_tx, "UI requested disconnection.");
+                        break;
+                    }
+                    _ => {
+                        log_warn!(&event_tx, "Command {:?} not yet supported over WebSocket.", cmd);
                     }
                 }
             }
-            // Priority 2: Outbound Frames (Clipboard, Heartbeat, etc.)
             Some(frame) = rx.recv() => {
-                let frame_type = format!("{:?}", frame);
-                if let Err(e) = write_frame(&mut send, &frame).await {
-                    let _ = log_error!(&event_tx, "Failed to send frame {} to server: {}. Terminating session.", frame_type, e);
+                let bytes = bincode::serialize(&frame)?;
+                if let Err(e) = ws_sink.send(Message::Binary(bytes)).await {
+                    log_error!(&event_tx, "Failed to send frame: {}", e);
                     break;
                 }
-                let _ = log_debug!(&event_tx, "Successfully sent frame type: {}", frame_type);
-            }
-            // Control Channel: Reader loop terminated
-            _ = err_rx.recv() => {
-                let _ = log_warn!(&event_tx, "Read loop terminated unexpectedly. Closing outbound stream.");
-                break;
             }
         }
     }
     
-    let _ = log_info!(&event_tx, "Client session terminated.");
-    let _ = event_tx.send(SessionEvent::Disconnected).await;
     Ok(())
-}
-
-async fn perform_file_send(
-    connection: &quinn::Connection, 
-    path: PathBuf, 
-    event_tx: &Sender<SessionEvent>
-) -> Result<()> {
-    log_info!(event_tx, "Initiating file transfer for: {:?}", path);
-    if let Ok(metadata) = tokio::fs::metadata(&path).await {
-        let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let size = metadata.len();
-        
-        let req = Frame::FileTransferRequest(FileTransferRequest {
-            id: rand::random(),
-            filename,
-            file_size: size,
-        });
-
-        // Open new bi-stream for negotiation to avoid race with main loop
-        log_debug!(event_tx, "Opening new bi-stream for file transfer negotiation");
-        let (mut req_send, mut req_recv) = connection.open_bi().await?;
-        write_frame(&mut req_send, &req).await?;
-        
-        // Wait for response on THIS stream
-        log_debug!(event_tx, "Awaiting file transfer response");
-        match read_frame(&mut req_recv).await? {
-             Some(Frame::FileTransferResponse(resp)) => {
-                if resp.accepted {
-                     log_info!(event_tx, "File transfer request accepted. Uploading...");
-                     let mut uni_send = connection.open_uni().await?;
-                     let mut file = File::open(&path).await?;
-                     let n = tokio::io::copy(&mut file, &mut uni_send).await?;
-                     uni_send.finish().await?;
-                     log_info!(event_tx, "File upload complete: {} bytes.", n);
-                } else {
-                     log_warn!(event_tx, "File transfer request was rejected by server.");
-                     let _ = event_tx.send(SessionEvent::Error("Transfer rejected.".into())).await;
-                }
-             }
-             _ => {
-                 log_error!(event_tx, "Received invalid response for file transfer");
-                 let _ = event_tx.send(SessionEvent::Error("Invalid response for file transfer.".into())).await;
-             }
-        }
-    } else {
-        log_error!(event_tx, "Failed to get metadata for file: {:?}", path);
-    }
-    Ok(())
-}
-
-async fn read_frame_loop(
-    mut recv: quinn::RecvStream, 
-    event_tx: Sender<SessionEvent>, 
-    sink: Arc<DefaultInputSink>,
-    tx_outbound: mpsc::Sender<Frame>,
-) {
-    log_debug!(&event_tx, "Starting frame read loop");
-    loop {
-         match read_frame(&mut recv).await {
-             Ok(Some(Frame::Input(event))) => {
-                 if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
-                     log_info!(&event_tx, "Screen focus switched to {:?}", side);
-                 } else {
-                     if let Err(e) = sink.inject_event(event) {
-                         log_debug!(&event_tx, "Warning: Failed to inject input event: {}", e);
-                     }
-                 }
-             }
-             Ok(Some(Frame::Clipboard(ClipboardEvent::Text(text)))) => {
-                 log_info!(&event_tx, "Updating local clipboard from server synchronization.");
-                 let clip = DefaultClipboard::new();
-                 if let Err(e) = clip.set_text(text) {
-                     log_error!(&event_tx, "Fatal: Clipboard update failed: {}", e);
-                 }
-             }
-             Ok(Some(Frame::Heartbeat(hb))) => {
-                 // Respond to heartbeat
-                 let _ = tx_outbound.send(Frame::Heartbeat(hb)).await;
-             }
-             Ok(Some(_)) => {
-                 log_debug!(&event_tx, "Received unknown frame type from server.");
-             },
-             Ok(None) => {
-                 log_info!(&event_tx, "Inbound protocol stream closed by server.");
-                 return;
-             },
-             Err(e) => {
-                 // Check if it's a disconnection-related error
-                 let is_disconnect = if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
-                     matches!(
-                         io_err.kind(),
-                         std::io::ErrorKind::UnexpectedEof | 
-                         std::io::ErrorKind::ConnectionReset | 
-                         std::io::ErrorKind::BrokenPipe |
-                         std::io::ErrorKind::TimedOut
-                     )
-                 } else {
-                     false
-                 };
-
-                 if is_disconnect {
-                     log_info!(&event_tx, "Server disconnected (Stream closed).");
-                 } else {
-                     log_error!(&event_tx, "Inbound protocol stream error: {}", e);
-                 }
-                 return;
-             },
-         }
-    }
 }

@@ -5,9 +5,8 @@ edition = "2021"
 
 [dependencies]
 platform-passer-core = { path = "../core" }
-quinn = "0.10"
-rustls = { version = "0.21", features = ["dangerous_configuration"] }
 tokio = { version = "1.0", features = ["full"] }
+tokio-tungstenite = "0.20"
+futures-util = "0.3"
 anyhow = "1.0"
 tracing = "0.1"
-rcgen = "0.11"
