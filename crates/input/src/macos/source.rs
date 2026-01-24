@@ -192,16 +192,21 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 // Use x=10.0 as a safe buffer.
                 // Restore Y from Virtual Cursor to maintain continuity.
                 let return_y = if let Ok(vc) = VIRTUAL_CURSOR.lock() { vc.1 } else { 0.5 };
+                let (bounds_w, bounds_h) = get_display_bounds();
+                let edge_pos = core_graphics::geometry::CGPoint { 
+                    x: 10.0, 
+                    y: (return_y * bounds_h) as f64
+                };
+
+                // CRITICAL: Call set_remote(false) FIRST to re-associate.
+                // THEN warp. If we warp while disassociated, the re-association might snap back to the "Center Lock" hardware position.
+                MacosInputSource::set_remote(false);
                 
                 unsafe {
-                    let edge_pos = core_graphics::geometry::CGPoint { 
-                        x: 10.0, 
-                        y: (return_y * max_height) as f64
-                    };
                     let _ = CGWarpMouseCursorPosition(edge_pos);
+                    println!("DEBUG: [W][M] Warped cursor to edge: ({}, {})", edge_pos.x, edge_pos.y);
                 }
 
-                MacosInputSource::set_remote(false);
                 is_remote = false;
                 
                 println!("DEBUG: [W][M] Returning to macOS. Triggered at virtual x={:.3}", check_x);
