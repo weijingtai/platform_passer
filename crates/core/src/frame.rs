@@ -8,6 +8,8 @@ pub enum Frame {
     Clipboard(ClipboardEvent),
     FileTransferRequest(FileTransferRequest),
     FileTransferResponse(FileTransferResponse),
+    FileData { id: u32, chunk: Vec<u8> },
+    FileEnd { id: u32 },
     ScreenSwitch(ScreenSide),
 }
 

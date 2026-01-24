@@ -10,6 +10,9 @@ use tokio::sync::mpsc::Sender;
 use std::sync::Arc;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use futures_util::{StreamExt, SinkExt};
+use std::collections::HashMap;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 
 pub async fn run_server_session(bind_addr: SocketAddr, event_tx: Sender<SessionEvent>) -> Result<()> {
     log_info!(&event_tx, "Starting WebSocket server session on {}", bind_addr);
@@ -83,6 +86,8 @@ async fn handle_protocol_session(
         }
     }
 
+    let mut active_files: HashMap<u32, File> = HashMap::new();
+
     log_debug!(&event_tx, "Entering protocol loop...");
     loop {
         tokio::select! {
@@ -90,17 +95,58 @@ async fn handle_protocol_session(
             msg = ws_stream.next() => {
                 match msg {
                     Some(Ok(Message::Binary(bytes))) => {
-                        let frame: Frame = bincode::deserialize(&bytes)?;
-                        match frame {
-                            Frame::Clipboard(ClipboardEvent::Text(text)) => {
-                                log_debug!(&event_tx, "Received clipboard update ({} chars)", text.len());
-                                let _ = clip.set_text(text);
+                        match bincode::deserialize::<Frame>(&bytes) {
+                            Ok(frame) => {
+                                match frame {
+                                    Frame::Clipboard(ClipboardEvent::Text(text)) => {
+                                        log_debug!(&event_tx, "Received clipboard update ({} chars)", text.len());
+                                        let _ = clip.set_text(text);
+                                    }
+                                    Frame::Heartbeat(hb) => {
+                                        let _ = ws_sink.send(Message::Binary(bincode::serialize(&Frame::Heartbeat(hb))?)).await;
+                                    }
+                                    Frame::FileTransferRequest(req) => {
+                                        log_info!(&event_tx, "File transfer request: {} ({} bytes)", req.filename, req.file_size);
+                                        let download_dir = std::path::Path::new("downloads");
+                                        let _ = tokio::fs::create_dir_all(download_dir).await;
+                                        let file_path = download_dir.join(&req.filename);
+                                        
+                                        match File::create(&file_path).await {
+                                            Ok(file) => {
+                                                active_files.insert(req.id, file);
+                                                let resp = Frame::FileTransferResponse(platform_passer_core::FileTransferResponse { id: req.id, accepted: true });
+                                                let _ = ws_sink.send(Message::Binary(bincode::serialize(&resp)?)).await;
+                                                log_info!(&event_tx, "Accepted file transfer ID: {}", req.id);
+                                            }
+                                            Err(e) => {
+                                                log_error!(&event_tx, "Failed to create file {:?}: {}", file_path, e);
+                                                let resp = Frame::FileTransferResponse(platform_passer_core::FileTransferResponse { id: req.id, accepted: false });
+                                                let _ = ws_sink.send(Message::Binary(bincode::serialize(&resp)?)).await;
+                                            }
+                                        }
+                                    }
+                                    Frame::FileData { id, chunk } => {
+                                        if let Some(file) = active_files.get_mut(&id) {
+                                            if let Err(e) = file.write_all(&chunk).await {
+                                                log_error!(&event_tx, "Failed to write chunk for file {}: {}", id, e);
+                                                active_files.remove(&id);
+                                            }
+                                        }
+                                    }
+                                    Frame::FileEnd { id } => {
+                                        if let Some(mut file) = active_files.remove(&id) {
+                                            let _ = file.flush().await;
+                                            log_info!(&event_tx, "File transfer completed for ID: {}", id);
+                                        }
+                                    }
+                                    _ => {
+                                        log_debug!(&event_tx, "Received unhandled frame type: {:?}", frame);
+                                    }
+                                }
                             }
-                            Frame::Heartbeat(hb) => {
-                                // Echo back
-                                ws_sink.send(Message::Binary(bincode::serialize(&Frame::Heartbeat(hb))?)).await?;
+                            Err(e) => {
+                                log_error!(&event_tx, "Failed to deserialize frame: {}", e);
                             }
-                            _ => {}
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
@@ -128,10 +174,13 @@ async fn handle_protocol_session(
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        log_warn!(&event_tx, "Input broadcast LAGGED by {} messages.", n);
+                        log_warn!(&event_tx, "Input broadcast LAGGED by {} messages. Skipping frames.", n);
                         continue;
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        log_error!(&event_tx, "Input broadcast channel closed.");
+                        break;
+                    }
                 }
             }
         }

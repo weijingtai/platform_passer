@@ -234,9 +234,11 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
         }
         CGEventType::ScrollWheel => {
             if !is_remote { return None; }
-            let dx = event.get_double_value_field(97) as f32; // kCGScrollWheelEventDeltaAxis2
-            let dy = event.get_double_value_field(96) as f32; // kCGScrollWheelEventDeltaAxis1
-            Some(InputEvent::Scroll { dx, dy })
+            // kCGScrollWheelEventDeltaAxis1 = 11 (Vertical, Y)
+            // kCGScrollWheelEventDeltaAxis2 = 12 (Horizontal, X)
+            let dy = event.get_integer_value_field(11); 
+            let dx = event.get_integer_value_field(12);
+            Some(InputEvent::Scroll { dx: dx as f32, dy: dy as f32 })
         }
         _ => None,
     }

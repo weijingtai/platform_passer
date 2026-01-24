@@ -60,6 +60,7 @@ pub async fn run_client_session(
     let event_tx_read = event_tx.clone();
     let sink_read = sink.clone();
     let tx_read = tx.clone();
+    let (err_tx, mut err_rx) = mpsc::channel::<()>(1);
     tokio::spawn(async move {
         while let Some(msg) = ws_stream.next().await {
             match msg {
@@ -80,6 +81,14 @@ pub async fn run_client_session(
                             Frame::Heartbeat(hb) => {
                                 let _ = tx_read.send(Frame::Heartbeat(hb)).await;
                             }
+                            Frame::FileTransferResponse(resp) => {
+                                if resp.accepted {
+                                    log_info!(&event_tx_read, "File transfer accepted by server.");
+                                } else {
+                                    log_warn!(&event_tx_read, "File transfer rejected by server.");
+                                }
+                                // In a full implementation, we'd use this to start/stop the sender loop.
+                            }
                             _ => {}
                         }
                     }
@@ -89,24 +98,29 @@ pub async fn run_client_session(
                     break;
                 }
                 Err(e) => {
-                    log_error!(&event_tx_read, "Read error: {}", e);
+                    let _ = log_error!(&event_tx_read, "Read error: {}. Terminating.", e);
                     break;
                 }
                 _ => {}
             }
         }
+        let _ = err_tx.send(()).await;
         let _ = event_tx_read.send(SessionEvent::Disconnected).await;
     });
 
     // 6. Start Heartbeat Task
     let tx_hb = tx.clone();
+    let hb_tx_log = event_tx.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
             let hb = Frame::Heartbeat(Heartbeat {
                 timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
             });
-            if tx_hb.send(hb).await.is_err() { break; }
+            if tx_hb.send(hb).await.is_err() { 
+                let _ = log_debug!(&hb_tx_log, "Stopping heartbeat task.");
+                break; 
+            }
         }
     });
 
@@ -131,16 +145,24 @@ pub async fn run_client_session(
                         break;
                     }
                     _ => {
-                        log_warn!(&event_tx, "Command {:?} not yet supported over WebSocket.", cmd);
+                        log_warn!(&event_tx, "Command {:?} not yet supported over WebSocket fully.", cmd);
                     }
                 }
             }
             Some(frame) = rx.recv() => {
+                let frame_type = format!("{:?}", frame);
                 let bytes = bincode::serialize(&frame)?;
                 if let Err(e) = ws_sink.send(Message::Binary(bytes)).await {
-                    log_error!(&event_tx, "Failed to send frame: {}", e);
+                    let _ = log_error!(&event_tx, "Failed to send frame {}: {}. Terminating.", frame_type, e);
                     break;
                 }
+                if !frame_type.contains("Heartbeat") {
+                    let _ = log_debug!(&event_tx, "Successfully sent frame type: {}", frame_type);
+                }
+            }
+            _ = err_rx.recv() => {
+                let _ = log_warn!(&event_tx, "Read loop terminated. Closing session.");
+                break;
             }
         }
     }
