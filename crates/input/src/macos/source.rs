@@ -90,15 +90,22 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                         }
                     }
 
-                    // Edge detection for Server -> Client switch
-                    if check_x >= 0.995 && !is_remote {
+                    // Edge detection for Server -> Client switch (Windows is on LEFT)
+                    if check_x <= 0.005 && !is_remote {
                         IS_REMOTE.store(true, Ordering::SeqCst);
-                        show_notification("Switched to Remote Control");
+                        
+                        // Initialize Virtual Cursor at the RIGHT edge of Windows (0.999)
+                        if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
+                            *vc = (0.999, abs_y);
+                        }
+                        
+                        show_notification("Switched to Remote (Windows Left)");
                         return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
                     }
                     
                     // Edge detection for Client -> Server switch
-                    if check_x <= 0.005 && is_remote {
+                    // Return when virtual cursor hits the RIGHT edge of Windows
+                    if check_x >= 0.995 && is_remote {
                         IS_REMOTE.store(false, Ordering::SeqCst);
                         show_notification("Returned to Local Control");
                         return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));

@@ -25,6 +25,7 @@ This document tracks the progress of the macOS platform support for the `platfor
     - **Tap Location**: Switched from `HID` to `Session`. This allows the application to suppress events (swallow inputs) without requiring Root privileges, strictly adhering to user session boundaries.
     - **Virtual Cursor**: Implemented a Delta-based tracking system in `source.rs`. When in Remote mode (where the OS cursor is frozen/swallowed), `VIRTUAL_CURSOR` accumulates `kCGMouseEventDeltaX/Y` to maintain a logical position for edge detection, ensuring the user can return to the Local screen.
     - **Stability**: Replaced `unwrap()` on `VIRTUAL_CURSOR` mutex with safe handling to prevent potential panics in the FFI callback which would abort the process. Added zero-division guards for display bounds.
+    - **Layout Configuration**: Inverted edge detection logic to support **Windows (Left) - macOS (Right)** layout. Remote control is now triggered by moving to the **Left** edge of macOS, and the Virtual Cursor initializes at `x=0.999` (Right edge of Windows) to enable return.
     - **Swallowing**: Confirmed `CGEventTap` swallows local events when `IS_REMOTE` is true, fixing the "Cursor Mirroring" issue where the macOS cursor would move while controlling Windows.
     - **Return**: Pressing `Escape` (or detected Left Edge return) sets `IS_REMOTE` to false.
 - **Observability**:
