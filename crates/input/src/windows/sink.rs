@@ -67,8 +67,39 @@ impl InputSink for WindowsInputSink {
                     dwExtraInfo: 0,
                 };
             }
-            InputEvent::Scroll { .. } => {
-                // TODO: Implement scroll processing
+            InputEvent::Scroll { dx, dy } => {
+                input.r#type = INPUT_MOUSE;
+                
+                // Vertical scroll
+                if dy.abs() > 0.0 {
+                    let mut v_input = INPUT::default();
+                    v_input.r#type = INPUT_MOUSE;
+                    v_input.Anonymous.mi = MOUSEINPUT {
+                        dx: 0,
+                        dy: 0,
+                        mouseData: (dy * 120.0) as u32, // WHEEL_DELTA = 120
+                        dwFlags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_WHEEL,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    };
+                    unsafe { SendInput(&[v_input], size_of::<INPUT>() as i32); }
+                }
+
+                // Horizontal scroll
+                if dx.abs() > 0.0 {
+                    let mut h_input = INPUT::default();
+                    h_input.r#type = INPUT_MOUSE;
+                    h_input.Anonymous.mi = MOUSEINPUT {
+                        dx: 0,
+                        dy: 0,
+                        mouseData: (dx * 120.0) as u32,
+                        dwFlags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_HWHEEL,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    };
+                    unsafe { SendInput(&[h_input], size_of::<INPUT>() as i32); }
+                }
+                
                 return Ok(());
             }
             InputEvent::ScreenSwitch(_) => {
