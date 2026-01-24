@@ -10,6 +10,9 @@ use core_graphics::event::{CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOp
 extern "C" {
     fn CGEventTapEnable(tap: *mut std::ffi::c_void, enable: bool);
     fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> u32;
+    fn CGDisplayHideCursor(display: u32) -> u32;
+    fn CGDisplayShowCursor(display: u32) -> u32;
+    fn CGMainDisplayID() -> u32;
 }
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -37,13 +40,25 @@ impl MacosInputSource {
         println!("InputSource: [DEBUG] set_remote({}) called", remote);
         let old = IS_REMOTE.swap(remote, Ordering::SeqCst);
         
-        // 1. CoreGraphics Cursor Association (The "Freeze" API)
+        if old == remote {
+            return; // Idempotency check essential for Hide/Show counts
+        }
+
         unsafe {
+            let main_display = CGMainDisplayID();
+            // 1. CoreGraphics Cursor Association (The "Freeze" API)
             // true = cursor moves with mouse (Local)
             // false = cursor decoupled (Remote)
             let result = CGAssociateMouseAndMouseCursorPosition(!remote);
             if result != 0 {
                 println!("InputSource: [ERROR] CGAssociateMouseAndMouseCursorPosition failed with error: {}", result);
+            }
+
+            // 2. Explicitly Hide/Show Cursor
+            if remote {
+                 let _ = CGDisplayHideCursor(main_display);
+            } else {
+                 let _ = CGDisplayShowCursor(main_display);
             }
         }
 
@@ -335,14 +350,13 @@ impl InputSource for MacosInputSource {
                                         Some(event.to_owned())
                                     }
                                     CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
-                                        // Mouse Move: PASS IT.
-                                        // We rely on `CGAssociateMouseAndMouseCursorPosition(false)` to keep the cursor frozen.
-                                        // If we swallow it, sometimes the OS gets confused or the tap times out?
-                                        // Passing it is safer for stability, and `CGAssociate` handles the visual freeze.
+                                        // Mouse Move: PASS IT so OS sees activity.
+                                        // CRITICAL: We rely on `set_remote` to handle Freeze/Hide.
+                                        // Do NOT reinfore here as high-frequency calls cause stability issues.
                                         Some(event.to_owned())
                                     }
                                     _ => {
-                                        // Clicks/Scrolls: Swallow to prevent interacting with local UI
+                                        // Clicks/Scrolls: Swallow
                                         None
                                     }
                                 }
@@ -407,9 +421,10 @@ impl InputSource for MacosInputSource {
             if let Some(rl) = rl_lock.take() {
                 rl.stop();
                 tracing::info!("InputSource: Capture stopped, run loop terminated.");
-                // Ensure cursor is re-associated on stop
+                // Ensure cursor is re-associated and SHOWN on stop
                 unsafe {
                     let _ = CGAssociateMouseAndMouseCursorPosition(true);
+                    let _ = CGDisplayShowCursor(CGMainDisplayID());
                 }
             }
         }
