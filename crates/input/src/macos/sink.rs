@@ -47,31 +47,29 @@ impl InputSink for MacosInputSink {
                 cg_event.post(CGEventTapLocation::HID);
             }
             InputEvent::Keyboard { key_code, is_down } => {
+                let mac_keycode = crate::keymap::windows_to_macos_keycode(key_code);
                 let cg_event = core_graphics::event::CGEvent::new_keyboard_event(
                     source,
-                    key_code as u16,
+                    mac_keycode,
                     is_down,
                 ).map_err(|_| anyhow!("Failed to create keyboard event"))?;
                 cg_event.post(CGEventTapLocation::HID);
             }
-            InputEvent::MouseButton { button_mask, is_down } => {
-                // Simplified button mapping
-                let button = if button_mask & 1 != 0 {
-                    CGMouseButton::Left
-                } else if button_mask & 2 != 0 {
-                    CGMouseButton::Right
-                } else {
-                    CGMouseButton::Center
+            InputEvent::MouseButton { button, is_down } => {
+                let cg_button = match button {
+                    platform_passer_core::MouseButton::Left => CGMouseButton::Left,
+                    platform_passer_core::MouseButton::Right => CGMouseButton::Right,
+                    platform_passer_core::MouseButton::Middle => CGMouseButton::Center,
                 };
 
                 let etype = if is_down {
-                    match button {
+                    match cg_button {
                         CGMouseButton::Left => CGEventType::LeftMouseDown,
                         CGMouseButton::Right => CGEventType::RightMouseDown,
                         _ => CGEventType::OtherMouseDown,
                     }
                 } else {
-                    match button {
+                    match cg_button {
                         CGMouseButton::Left => CGEventType::LeftMouseUp,
                         CGMouseButton::Right => CGEventType::RightMouseUp,
                         _ => CGEventType::OtherMouseUp,
@@ -88,7 +86,7 @@ impl InputSink for MacosInputSink {
                     source,
                     etype,
                     pos,
-                    button,
+                    cg_button,
                 ).map_err(|_| anyhow!("Failed to create mouse button event"))?;
                 cg_event.post(CGEventTapLocation::HID);
             }
@@ -119,6 +117,9 @@ impl InputSink for MacosInputSink {
                         cg_event.post(CGEventTapLocation::HID);
                     }
                 }
+            }
+            InputEvent::ScreenSwitch(_) => {
+                // Sinks don't handle screen switches directly
             }
         }
 

@@ -81,6 +81,11 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 is_down: matches!(etype, CGEventType::KeyDown),
             })
         }
+        CGEventType::ScrollWheel => {
+            let dx = event.get_double_value_field(97) as f32; // kCGScrollWheelEventDeltaAxis2
+            let dy = event.get_double_value_field(96) as f32; // kCGScrollWheelEventDeltaAxis1
+            Some(InputEvent::Scroll { dx, dy })
+        }
         _ => None,
     }
 }
@@ -106,6 +111,7 @@ impl InputSource for MacosInputSource {
                     CGEventType::OtherMouseUp,
                     CGEventType::KeyDown,
                     CGEventType::KeyUp,
+                    CGEventType::ScrollWheel,
                 ],
                 move |_proxy, etype, event| {
                     match etype {
