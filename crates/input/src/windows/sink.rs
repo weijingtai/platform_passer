@@ -76,7 +76,7 @@ impl InputSink for WindowsInputSink {
                     v_input.Anonymous.mi = MOUSEINPUT {
                         dx: 0,
                         dy: 0,
-                        mouseData: (dy * 120.0) as u32, // WHEEL_DELTA = 120
+                        mouseData: (dy * 120.0) as i32 as u32, // WHEEL_DELTA = 120, cast to i32 then bit-cast to u32
                         dwFlags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_WHEEL,
                         time: 0,
                         dwExtraInfo: 0,
@@ -91,7 +91,7 @@ impl InputSink for WindowsInputSink {
                     h_input.Anonymous.mi = MOUSEINPUT {
                         dx: 0,
                         dy: 0,
-                        mouseData: (dx * 120.0) as u32,
+                        mouseData: (dx * 120.0) as i32 as u32,
                         dwFlags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEEVENTF_HWHEEL,
                         time: 0,
                         dwExtraInfo: 0,

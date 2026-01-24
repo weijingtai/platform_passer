@@ -120,6 +120,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             // --- LIGIC: Windows (Left) - macOS (Right) ---
 
             // Switch to Remote: Triggered when at macOS LEFT edge
+            // Switch to Remote: Triggered when at macOS LEFT edge
             if !is_remote && abs_x <= 0.002 {
                 IS_REMOTE.store(true, Ordering::SeqCst);
                 is_remote = true;
@@ -128,10 +129,11 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 // Use 0.950 to provide SIGNIFICANT hysteresis (avoid immediate return)
                 if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
                     *vc = (0.950, abs_y);
-                    check_x = vc.0;
+                    check_x = vc.0; // CRITICAL: Update decision variable for this frame!
                 }
                 
                 println!("DEBUG: [W][M] Entering Windows (Left) from macOS (Right). Triggered at physical x={:.3}. Entry virtual x=0.95", abs_x);
+                // Return immediately to prevent falling through to "Return to Local" check in the same frame
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
             }
             
