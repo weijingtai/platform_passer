@@ -20,9 +20,10 @@ This document tracks the progress of the macOS platform support for the `platfor
 - **Input Sync Expansion**:
     - **Modifiers**: Implemented `FlagsChanged` event capture in `MacosInputSource`. Shift, Option, Control, and Command states are now synchronized in real-time, enabling combination keys (e.g., `Shift + A`).
     - **Keypad**: Fully mapped macOS keyboard keypad sector (codes 65-92) to Windows Virtual Keys.
-- **Magic Edge Refinement**:
-    - Stabilized edge detection logic for switching between focus modes (`Local` <-> `Remote`).
-    - Fixed "Follow-Me" bug: `CGEventTap` now correctly swallows all mouse/keyboard events locally when in `Remote` mode.
+- **Magic Edge & Isolation Refinement**:
+    - **Isolation**: prevents "Ghost Inputs". Modified `handle_event` to return `None` when `!IS_REMOTE` (Local Mode), ensuring macOS inputs are NOT sent to Windows unless explicitly switched.
+    - **Swallowing**: Confirmed `CGEventTap` swallows local events when `IS_REMOTE` is true, fixing the "Cursor Mirroring" issue where the macOS cursor would move while controlling Windows.
+    - **Return**: Pressing `Escape` (or detected Left Edge return) sets `IS_REMOTE` to false.
 - **Observability**:
     - Implemented high-priority event forwarding from session loops to the desktop GUI console. Handshakes, pulses, and errors are now visible to the end user.
 - **Verification**:

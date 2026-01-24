@@ -22,8 +22,8 @@ pub fn make_server_endpoint(bind_addr: SocketAddr, cert: &Certificate) -> Result
     
     // Set transport-specific parameters
     let mut transport_config = TransportConfig::default();
-    transport_config.max_idle_timeout(Some(Duration::from_secs(60).try_into()?));
-    transport_config.keep_alive_interval(Some(Duration::from_secs(10)));
+    transport_config.max_idle_timeout(Some(Duration::from_secs(300).try_into()?));
+    transport_config.keep_alive_interval(Some(Duration::from_secs(5)));
     server_config.transport_config(Arc::new(transport_config));
 
     let endpoint = Endpoint::server(server_config, bind_addr)

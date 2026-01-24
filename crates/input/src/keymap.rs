@@ -65,7 +65,47 @@ pub fn macos_to_windows_vk(macos_code: u32) -> u32 {
         124 => 0x27, // Right
         125 => 0x28, // Down
         126 => 0x26, // Up
-        
+
+        // Keypad
+        65 => 0x6E, // Keypad .
+        67 => 0x6A, // Keypad *
+        69 => 0x6B, // Keypad +
+        71 => 0x0C, // Keypad Clear (NumLock-ish)
+        75 => 0x6F, // Keypad /
+        76 => 0x0D, // Keypad Enter
+        78 => 0x6D, // Keypad -
+        81 => 0x92, // Keypad = (VK_OEM_NEC_EQUAL)
+        82 => 0x60, // Keypad 0
+        83 => 0x61, // Keypad 1
+        84 => 0x62, // Keypad 2
+        85 => 0x63, // Keypad 3
+        86 => 0x64, // Keypad 4
+        87 => 0x65, // Keypad 5
+        88 => 0x66, // Keypad 6
+        89 => 0x67, // Keypad 7
+        91 => 0x68, // Keypad 8
+        92 => 0x69, // Keypad 9
+
+        // Other common keys
+        96 => 0x74, // F5
+        97 => 0x75, // F6
+        98 => 0x76, // F7
+        99 => 0x72, // F3
+        100 => 0x77, // F8
+        101 => 0x78, // F9
+        103 => 0x7A, // F11
+        109 => 0x79, // F10
+        111 => 0x7B, // F12
+        114 => 0x2D, // Insert (Help on some Mac keyboards)
+        115 => 0x24, // Home
+        116 => 0x21, // Page Up
+        117 => 0x2E, // Forward Delete
+        118 => 0x73, // F4
+        119 => 0x23, // End
+        120 => 0x71, // F2
+        121 => 0x22, // Page Down
+        122 => 0x70, // F1
+
         _ => macos_code,
     }
 }
@@ -124,19 +164,39 @@ pub fn windows_to_macos_keycode(win_vk: u32) -> u16 {
         0xC0 => 50,  // `
         0x08 => 51,  // Backspace
         0x1B => 53,  // Escape
-        
+
         // Modifiers
         0x5B => 55,  // Windows Key -> Command
         0x10 => 56,  // Shift
         0x14 => 57,  // Caps Lock
         0x12 => 58,  // Alt -> Option
         0x11 => 59,  // Control
-        
+
         // Arrows
         0x25 => 123, // Left
         0x27 => 124, // Right
         0x28 => 125, // Down
         0x26 => 126, // Up
+
+        // Keypad
+        0x6E => 65, // Keypad .
+        0x6A => 67, // Keypad *
+        0x6B => 69, // Keypad +
+        0x0C => 71, // Keypad Clear
+        0x6F => 75, // Keypad /
+        // 0x0D handled above as 36 (Enter)
+        0x6D => 78, // Keypad -
+        0x92 => 81, // Keypad =
+        0x60 => 82, // Keypad 0
+        0x61 => 83, // Keypad 1
+        0x62 => 84, // Keypad 2
+        0x63 => 85, // Keypad 3
+        0x64 => 86, // Keypad 4
+        0x65 => 87, // Keypad 5
+        0x66 => 88, // Keypad 6
+        0x67 => 89, // Keypad 7
+        0x68 => 91, // Keypad 8
+        0x69 => 92, // Keypad 9
 
         _ => win_vk as u16,
     }

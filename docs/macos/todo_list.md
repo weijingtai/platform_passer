@@ -31,7 +31,9 @@ This document outlines the tasks for the macOS developer to ensure parity with t
     - [x] Implement **Escape** hotkey as a fail-safe to return focus to macOS locally.
     - [ ] **Hardware Verification**: Verify edge transitions feel "smooth" and don't trigger accidentally.
 - [x] **Event Swallowing (Mirroring Fix)**:
-    - [x] Ensure `CGEventTap` returns `NULL` when `IS_REMOTE` is true to stay stationary on macOS.
+    - [x] Ensure `CGEventTap` returns `NULL` when `IS_REMOTE` is true (Remote Mode).
+    - [x] **Strict Isolation**: Ensure `CGEventTap` returns `NULL` for outbound events when `!IS_REMOTE` (Local Mode), preventing leakage to Windows.
+    - [ ] **Verification**: Move mouse on macOS (Local) and ensure Windows cursor does NOT move.
 
 ### 4. Input Mappings <!-- id: mac_map -->
 - [/] **Key Mapping Implementation**:

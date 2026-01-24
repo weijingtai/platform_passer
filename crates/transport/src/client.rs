@@ -43,8 +43,8 @@ fn configure_client() -> ClientConfig {
 
     // Set transport-specific parameters
     let mut transport_config = TransportConfig::default();
-    transport_config.max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()));
-    transport_config.keep_alive_interval(Some(Duration::from_secs(10)));
+    transport_config.max_idle_timeout(Some(Duration::from_secs(300).try_into().unwrap()));
+    transport_config.keep_alive_interval(Some(Duration::from_secs(5)));
     client_config.transport_config(Arc::new(transport_config));
     
     client_config

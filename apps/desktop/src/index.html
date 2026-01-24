@@ -99,6 +99,30 @@
       console.error("Error initializing Tauri APIs:", e);
     }
 
+    // Move outside to ensure it's globally available for debugging
+    let eventListener = null;
+
+    function setupEventListener() {
+      if (window.__TAURI__) {
+        window.__TAURI__.event.listen('session-event', (event) => {
+          try {
+            console.log("Raw event payload:", event.payload);
+            const { event_type, message } = event.payload;
+            log(`[${event_type}] ${message}`); // Explicitly format to force display
+            updateStatus(event_type, message);
+          } catch (err) {
+            console.error("Event processing error:", err);
+            log(`JS Error: ${err.message}`);
+          }
+        }).then(unlisten => {
+          eventListener = unlisten;
+          log("System: Event listener fully visible.");
+        }).catch(e => log(`Listener Error: ${e}`));
+      } else {
+        console.warn("Tauri global missing during setup");
+      }
+    }
+
     async function switchTab(tab) {
       document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
       const activeTab = document.querySelector(`.tab[onclick*="switchTab('${tab}')"]`);
@@ -211,7 +235,10 @@
 
     window.addEventListener('DOMContentLoaded', () => {
       // Small delay to ensure Tauri global is ready
-      setTimeout(() => switchTab('client'), 500);
+      setTimeout(() => {
+        switchTab('client');
+        setupEventListener();
+      }, 500);
     });
   </script>
 </body>

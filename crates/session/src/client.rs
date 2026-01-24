@@ -89,9 +89,12 @@ pub async fn run_client_session(
 
     // 7. Start Heartbeat Task
     let tx_hb = tx.clone();
+    let hb_tx_log = event_tx.clone();
     tokio::spawn(async move {
+        let mut count = 0;
         loop {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            count += 1;
             let hb = Frame::Heartbeat(Heartbeat {
                 timestamp: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -99,7 +102,11 @@ pub async fn run_client_session(
                     .as_secs(),
             });
             if let Err(_) = tx_hb.send(hb).await {
+                let _ = log_debug!(&hb_tx_log, "Stopping heartbeat task due to channel closure.");
                 break;
+            }
+            if count % 6 == 0 {
+                let _ = log_debug!(&hb_tx_log, "Session active: Heartbeat pulse #{}", count);
             }
         }
     });
@@ -111,24 +118,28 @@ pub async fn run_client_session(
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
                     SessionCommand::SendFile(path) => {
+                         let _ = log_info!(&event_tx, "UI requested file send: {:?}", path);
                          if let Err(e) = perform_file_send(&connection, path, &event_tx).await {
                              let _ = event_tx.send(SessionEvent::Error(format!("File send error: {}", e))).await;
                          }
                     }
-                    SessionCommand::Disconnect => break,
+                    SessionCommand::Disconnect => {
+                         let _ = log_info!(&event_tx, "UI requested disconnection.");
+                         break;
+                    }
                 }
             }
             // Priority 2: Outbound Frames (Clipboard, Heartbeat, etc.)
             Some(frame) = rx.recv() => {
                 if let Err(e) = write_frame(&mut send, &frame).await {
-                    log_error!(&event_tx, "Failed to send frame: {}", e);
+                    let _ = log_error!(&event_tx, "Failed to send frame to server: {}. Terminating session.", e);
                     break;
                 }
             }
         }
     }
     
-    log_info!(&event_tx, "Client session terminating...");
+    let _ = log_info!(&event_tx, "Client session terminated.");
     let _ = event_tx.send(SessionEvent::Disconnected).await;
     Ok(())
 }
