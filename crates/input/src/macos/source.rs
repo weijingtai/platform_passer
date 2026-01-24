@@ -77,18 +77,14 @@ fn get_display_bounds() -> (f32, f32) {
     }
 }
 
-fn show_notification(text: &str) {
-    let t = text.to_string();
-    thread::spawn(move || {
-        let _ = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(format!("display notification \"{}\" with title \"Platform Passer\"", t))
-            .output();
-    });
+fn show_notification(_text: &str) {
+    // CRITICAL: std::process::Command spawning osascript from inside/near 
+    // a high-frequency FFI callback or multi-threaded context is causing 
+    // "error 0" (process aborts). Leaving this as a no-op for stability.
 }
 
 fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
-    let is_remote = IS_REMOTE.load(Ordering::SeqCst);
+    let mut is_remote = IS_REMOTE.load(Ordering::SeqCst);
     let (max_width, max_height) = get_display_bounds();
 
     match etype {
@@ -99,14 +95,13 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             let abs_x = point.x as f32 / max_width;
             let abs_y = point.y as f32 / max_height;
 
-            // Decision variables
+            // Decision variable: By default follow physical cursor
             let mut check_x = abs_x;
 
             if is_remote {
                 let delta_x = event.get_double_value_field(4) as f32; // kCGMouseEventDeltaX = 4
                 let delta_y = event.get_double_value_field(5) as f32; // kCGMouseEventDeltaY = 5
                 
-                // Panic-safe lock acquisition
                 if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
                     // Update virtual coords (normalized)
                     vc.0 += delta_x / max_width; 
@@ -120,38 +115,38 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                     
                     check_x = vc.0;
                 }
-            } else {
-                // Update virtual cursor to match physical when local
-                if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
-                    *vc = (abs_x, abs_y);
-                }
             }
 
-            // Edge detection for Server -> Client switch (Windows is on LEFT)
-            if check_x <= 0.005 && !is_remote {
+            // --- LIGIC: Windows (Left) - macOS (Right) ---
+
+            // Switch to Remote: Triggered when at macOS LEFT edge
+            if !is_remote && abs_x <= 0.002 {
                 IS_REMOTE.store(true, Ordering::SeqCst);
+                is_remote = true; // Update local state for subsequent logic in this call
                 
-                // Initialize Virtual Cursor at the RIGHT edge of Windows (0.999)
+                // Initialize Virtual Cursor at the RIGHT edge of Windows
                 if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
-                    *vc = (0.999, abs_y);
+                    *vc = (0.990, abs_y); // Slightly away from edge for hysteresis
+                    check_x = vc.0;
                 }
                 
-                show_notification("Switched to Remote (Windows Left)");
-                tracing::info!("InputSource: Switched to Remote Control (Left Edge -> Windows Right Edge)");
+                tracing::info!("InputSource: Layout [W][M]. Entered Windows (Left) from macOS (Right). Start at x=0.99");
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
             }
             
-            // Edge detection for Client -> Server switch
-            // Return when virtual cursor hits the RIGHT edge of Windows
-            if check_x >= 0.995 && is_remote {
+            // Return to Local: Triggered when Virtual Cursor hits RIGHT edge of Windows
+            if is_remote && check_x >= 0.998 {
                 MacosInputSource::set_remote(false);
-                show_notification("Returned to Local Control");
-                tracing::info!("InputSource: Returned to Local Control (Windows Right Edge -> Left Edge)");
+                is_remote = false;
+                
+                tracing::info!("InputSource: Layout [W][M]. Returned to macOS.");
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
             }
 
+            // If not remote, don't send moves
             if !is_remote { return None; }
 
+            // Route correct coordinate
             let mut final_x = abs_x;
             let mut final_y = abs_y;
             

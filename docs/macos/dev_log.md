@@ -27,6 +27,11 @@ This document tracks the progress of the macOS platform support for the `platfor
     - Implemented a workspace-wide bounding box calculation (`get_display_bounds`) that covers all active monitors. Coordinates are now normalized against the entire workspace rather than just the main display.
 - **Performance**:
     - Integrated a `DISPLAY_CACHE` with a refresh strategy to avoid redundant FFI calls during every mouse movement tick.
+- **Hysteresis & Conflict Resolution (Ping-Pong Fix)**:
+    - **Directional Logic**: Fixed a loop where entering Windows (Left) from macOS (Right) at `x=1.0` would immediately trigger a return logic at `x >= 0.995`. Now uses `x=0.99` for entry and `x=0.998` for return.
+    - **State Synchronization**: Modified `handle_event` to use a mutable local state that updates mid-function, ensuring coordinate routing (`abs` vs `virtual`) is consistent with the latest switch result.
+- **Critical Stability**:
+    - **Notification Disablement**: Permanently disabled `osascript` spawning from within event callbacks. Spawning processes from high-frequency FFI hooks causes process aborts on macOS, explaining the "error 0" disconnects.
 
 ### [2026-01-21] Robust Logging & ALPN Fix
 - **Networking Stability**:

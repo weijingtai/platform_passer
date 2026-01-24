@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use platform_passer_session::logging::GuiLogLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use std::io::Write;
 
 // Shared log sender for GUI updates
 struct LogState {
@@ -158,12 +159,38 @@ fn main() {
     let log_tx = Arc::new(Mutex::new(None));
     let gui_layer = GuiLogLayer { tx: log_tx.clone() };
 
+    // File logging setup
+    let log_path = PathBuf::from("../../docs/windows/debug/latest.log");
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    
+    // Create file appender that overwrites (std::fs::File::create truncates)
+    let file_appender = if let Ok(f) = std::fs::File::create(&log_path) {
+        Some(Arc::new(Mutex::new(f)))
+    } else {
+        None
+    };
+
+    let file_layer = if let Some(appender) = file_appender {
+        Some(tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(move || {
+                SharedFileWriter {
+                    file: appender.clone(),
+                }
+            }))
+    } else {
+        None
+    };
+
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(tracing_subscriber::EnvFilter::new(
             std::env::var("RUST_LOG").unwrap_or_else(|_| filter.into()),
         ))
         .with(gui_layer)
+        .with(file_layer)
         .init();
     
     tauri::Builder::default()
@@ -176,4 +203,20 @@ fn main() {
         .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action, check_accessibility])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+struct SharedFileWriter {
+    file: Arc<Mutex<std::fs::File>>,
+}
+
+impl std::io::Write for SharedFileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut file = self.file.lock().map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Lock poisoned"))?;
+        file.write(buf)
+    }
+    
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut file = self.file.lock().map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Lock poisoned"))?;
+        file.flush()
+    }
 }
