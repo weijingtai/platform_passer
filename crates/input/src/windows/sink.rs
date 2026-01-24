@@ -1,9 +1,11 @@
 use crate::InputSink;
 use anyhow::{Result, anyhow};
-use platform_passer_core::InputEvent;
+use platform_passer_core::{InputEvent, MouseButton};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, VIRTUAL_KEY,
+    SendInput, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, VIRTUAL_KEY,
     KEYBDINPUT, MOUSEINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+    MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
 };
 use std::mem::size_of;
 
@@ -46,13 +48,32 @@ impl InputSink for WindowsInputSink {
                     dwExtraInfo: 0,
                 };
             }
-            InputEvent::MouseButton { .. } => {
-                // TODO: Implement button processing
-                return Ok(()); 
+            InputEvent::MouseButton { button, is_down } => {
+                input.r#type = INPUT_MOUSE;
+                let flags = match (button, is_down) {
+                    (MouseButton::Left, true) => MOUSEEVENTF_LEFTDOWN,
+                    (MouseButton::Left, false) => MOUSEEVENTF_LEFTUP,
+                    (MouseButton::Right, true) => MOUSEEVENTF_RIGHTDOWN,
+                    (MouseButton::Right, false) => MOUSEEVENTF_RIGHTUP,
+                    (MouseButton::Middle, true) => MOUSEEVENTF_MIDDLEDOWN,
+                    (MouseButton::Middle, false) => MOUSEEVENTF_MIDDLEUP,
+                };
+                input.Anonymous.mi = MOUSEINPUT {
+                    dx: 0,
+                    dy: 0,
+                    mouseData: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                };
             }
             InputEvent::Scroll { .. } => {
-               // TODO: Implement scroll processing
-               return Ok(());
+                // TODO: Implement scroll processing
+                return Ok(());
+            }
+            InputEvent::ScreenSwitch(_) => {
+                // Sinks don't handle screen switches directly yet
+                return Ok(());
             }
         }
 

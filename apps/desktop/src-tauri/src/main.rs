@@ -54,15 +54,14 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
         
         // Event Forwarder Loop
         while let Some(event) = rx.recv().await {
-            let _ = window.emit("session-event", Payload {
-                event_type: "Log".to_string(), 
-                message: match event {
-                    SessionEvent::Log { level, message } => format!("[{:?}] {}", level, message),
-                    SessionEvent::Connected(s) => format!("Connected to {}", s),
-                    SessionEvent::Disconnected => "Disconnected".to_string(),
-                    SessionEvent::Error(s) => format!("Error: {}", s),
-                }
-            });
+            let (event_type, message) = match event {
+                SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
+                SessionEvent::Connected(s) => ("Connected".to_string(), format!("Connected to {}", s)),
+                SessionEvent::Disconnected => ("Disconnected".to_string(), "Disconnected".to_string()),
+                SessionEvent::Error(s) => ("Error".to_string(), format!("Error: {}", s)),
+            };
+
+            let _ = window.emit("session-event", Payload { event_type, message });
         }
         
         *running_clone.lock().unwrap() = false;
@@ -100,15 +99,14 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
 
         // Event Forwarder Loop
         while let Some(event) = rx.recv().await {
-            let _ = window.emit("session-event", Payload {
-                event_type: "Log".to_string(), 
-                message: match event {
-                    SessionEvent::Log { level, message } => format!("[{:?}] {}", level, message),
-                    SessionEvent::Connected(s) => format!("Connected to {}", s),
-                    SessionEvent::Disconnected => "Disconnected".to_string(),
-                    SessionEvent::Error(s) => format!("Error: {}", s),
-                }
-            });
+            let (event_type, message) = match event {
+                SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
+                SessionEvent::Connected(s) => ("Connected".to_string(), format!("Connected to {}", s)),
+                SessionEvent::Disconnected => ("Disconnected".to_string(), "Disconnected".to_string()),
+                SessionEvent::Error(s) => ("Error".to_string(), format!("Error: {}", s)),
+            };
+
+            let _ = window.emit("session-event", Payload { event_type, message });
         }
         *running_clone.lock().unwrap() = false;
         *tx_clone.lock().unwrap() = None;

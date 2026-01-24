@@ -1,6 +1,6 @@
 use crate::events::SessionEvent;
 use crate::commands::SessionCommand;
-use crate::{log_info, log_error, log_debug};
+use crate::{log_info, log_error, log_debug, log_warn};
 use anyhow::Result;
 use platform_passer_core::{Frame, ClipboardEvent, FileTransferRequest, Handshake, Heartbeat, write_frame, read_frame};
 use platform_passer_transport::{make_client_endpoint};
@@ -191,8 +191,12 @@ async fn read_frame_loop(
     loop {
          match read_frame(&mut recv).await {
              Ok(Some(Frame::Input(event))) => {
-                 if let Err(e) = sink.inject_event(event) {
-                     log_debug!(&event_tx, "Warning: Failed to inject input event: {}", e);
+                 if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
+                     log_info!(&event_tx, "Screen focus switched to {:?}", side);
+                 } else {
+                     if let Err(e) = sink.inject_event(event) {
+                         log_debug!(&event_tx, "Warning: Failed to inject input event: {}", e);
+                     }
                  }
              }
              Ok(Some(Frame::Clipboard(ClipboardEvent::Text(text)))) => {

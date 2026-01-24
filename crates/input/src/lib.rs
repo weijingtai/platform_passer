@@ -1,4 +1,5 @@
 pub mod traits;
+pub mod keymap;
 
 #[cfg(target_os = "windows")]
 pub mod windows;

@@ -14,6 +14,22 @@ This document tracks the progress of the macOS platform support for the `platfor
 
 ## Synchronization Log
 
+### [2026-01-23] Screen Focus & Input Synchronization
+- **Screen Focus Switching (Magic Edge)**:
+    - Implemented edge detection in `MacosInputSource` (Server).
+    - **Trigger**: Moving mouse to the `Right` edge of the main screen now sets `IS_REMOTE` to true and sends a `ScreenSwitch` event.
+    - **Return**: Pressing `Escape` (or detected Left Edge return) sets `IS_REMOTE` to false.
+- **Input Swallowing**:
+    - `CGEventTap` updated to return `NULL` when `IS_REMOTE` is active, effectively hiding the cursor and preventing unintended actions on the macOS machine.
+- **Input Reliability & Mapping**:
+    - **Keyboard**: Implemented `macos_to_windows_vk` mapping in `keymap.rs`. macOS keys now translate correctly to Windows Virtual-Key codes (e.g., Backspace).
+    - **Mouse Buttons**: Added support for `Left/Right/Middle` mouse button capture in `handle_event`.
+- **UI Enhancements**:
+    - Integrated a real-time connection status indicator in the desktop GUI.
+- **Verification**:
+    - Verified connectivity between macOS (Server) and Windows (Client).
+    - Confirmed mouse buttons and basic keyboard input are working as expected.
+
 ### [2026-01-21] Robust Logging & ALPN Fix
 - **Networking Stability**:
     - Resolved `no_application_protocol` (Error 120) by implementing explicit ALPN configuration (`pp/1`) on both client and server transport layers.

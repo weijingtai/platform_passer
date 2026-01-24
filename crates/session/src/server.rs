@@ -164,6 +164,9 @@ async fn handle_connection(
                 }
                 // Send inputs to client
                 Ok(event) = input_rx.recv() => {
+                    if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
+                        log_info!(&event_tx_loop, "Screen focus switched to {:?}", side);
+                    }
                     if let Err(e) = write_frame(&mut send, &Frame::Input(event)).await {
                         log_debug!(&event_tx_loop, "Failed to send input to client: {}", e);
                         break;

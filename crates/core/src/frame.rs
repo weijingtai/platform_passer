@@ -8,6 +8,13 @@ pub enum Frame {
     Clipboard(ClipboardEvent),
     FileTransferRequest(FileTransferRequest),
     FileTransferResponse(FileTransferResponse),
+    ScreenSwitch(ScreenSide),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+pub enum ScreenSide {
+    Local,
+    Remote,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -45,7 +52,15 @@ pub struct Heartbeat {
 pub enum InputEvent {
     /// Normalized coordinates from 0.0 to 1.0
     MouseMove { x: f32, y: f32 },
-    MouseButton { button_mask: u32, is_down: bool },
+    MouseButton { button: MouseButton, is_down: bool },
     Keyboard { key_code: u32, is_down: bool },
     Scroll { dx: f32, dy: f32 },
+    ScreenSwitch(ScreenSide),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
 }

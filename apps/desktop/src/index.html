@@ -13,7 +13,13 @@
 
 <body>
   <div class="container">
-    <h1>Platform Passer</h1>
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <h1>Platform Passer</h1>
+      <div id="connection-status" class="status-indicator">
+        <span class="status-dot"></span>
+        <span id="status-text">Disconnected</span>
+      </div>
+    </div>
 
     <div class="tabs">
       <div class="tab active" onclick="switchTab('client')">Client Mode</div>
@@ -184,8 +190,23 @@
       }
     }
 
+    function updateStatus(type, message) {
+      const statusIndicator = document.getElementById('connection-status');
+      const statusText = document.getElementById('status-text');
+
+      if (type === 'Connected') {
+        statusIndicator.classList.add('connected');
+        statusText.innerText = 'Connected';
+      } else if (type === 'Disconnected' || type === 'Error') {
+        statusIndicator.classList.remove('connected');
+        statusText.innerText = 'Disconnected';
+      }
+    }
+
     window.__TAURI__.event.listen('session-event', (event) => {
-      log(event.payload.message);
+      const { event_type, message } = event.payload;
+      log(message);
+      updateStatus(event_type, message);
     });
 
     window.addEventListener('DOMContentLoaded', () => {
