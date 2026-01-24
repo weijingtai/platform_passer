@@ -3,7 +3,7 @@ use tokio::sync::mpsc::Sender;
 use tracing;
 
 pub async fn emit_log(tx: &Sender<SessionEvent>, level: LogLevel, message: String) {
-    // Print to tracing (stdout/file)
+    // Print to tracing (stdout/file) immediately
     match level {
         LogLevel::Trace => tracing::trace!("{}", message),
         LogLevel::Debug => tracing::debug!("{}", message),
@@ -12,8 +12,11 @@ pub async fn emit_log(tx: &Sender<SessionEvent>, level: LogLevel, message: Strin
         LogLevel::Error => tracing::error!("{}", message),
     }
 
-    // Send to UI
-    let _ = tx.send(SessionEvent::Log { level, message }).await;
+    // Send to UI non-blockingly to avoid stalling the protocol loop
+    if let Err(e) = tx.try_send(SessionEvent::Log { level, message }) {
+        // If the UI is too slow, we just log the drop to tracing
+        tracing::trace!("UI log channel full, dropping log event: {}", e);
+    }
 }
 
 #[macro_export]

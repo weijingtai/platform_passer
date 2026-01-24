@@ -1,5 +1,5 @@
 use crate::events::SessionEvent;
-use crate::{log_info, log_error, log_debug};
+use crate::{log_info, log_error, log_debug, log_warn};
 use anyhow::Result;
 use platform_passer_core::{Frame, InputEvent, ClipboardEvent, Handshake, FileTransferResponse, write_frame, read_frame};
 use platform_passer_transport::{generate_self_signed_cert, make_server_endpoint};
@@ -93,6 +93,26 @@ async fn handle_connection(
         let connection_clone = connection.clone();
         let event_tx_loop = event_tx.clone();
 
+        let connection_uni = connection.clone();
+        let event_tx_uni = event_tx_loop.clone();
+        tokio::spawn(async move {
+            while let Ok(mut uni_recv) = connection_uni.accept_uni().await {
+                let tx_file = event_tx_uni.clone();
+                tokio::spawn(async move {
+                    let download_dir = std::path::Path::new("downloads");
+                    let _ = tokio::fs::create_dir_all(download_dir).await;
+                    let file_path = download_dir.join(format!("incoming_{}.data", rand::random::<u32>()));
+                    if let Ok(mut file) = File::create(&file_path).await {
+                         let _ = log_info!(&tx_file, "Accepting background data stream into {:?}", file_path);
+                         match tokio::io::copy(&mut uni_recv, &mut file).await {
+                             Ok(n) => { let _ = log_info!(&tx_file, "Data stream saved: {} bytes", n); }
+                             Err(e) => { let _ = log_error!(&tx_file, "Data stream failed: {}", e); }
+                         }
+                    }
+                });
+            }
+        });
+
         log_debug!(&event_tx_loop, "Entering protocol loop for {}", remote_addr);
         loop {
             tokio::select! {
@@ -114,7 +134,7 @@ async fn handle_connection(
                                     }
                                 }
                                 Frame::FileTransferRequest(req) => {
-                                   log_info!(&event_tx_loop, "File transfer request: {} ({} bytes)", req.filename, req.file_size);
+                                   log_info!(&event_tx_loop, "File transfer request accepted: {} ({} bytes)", req.filename, req.file_size);
                                    let resp = Frame::FileTransferResponse(FileTransferResponse {
                                        id: req.id,
                                        accepted: true,
@@ -123,6 +143,7 @@ async fn handle_connection(
                                        log_error!(&event_tx_loop, "Failed to send file response: {}", e);
                                        break;
                                    }
+                                   // Logic moved to background uni-acceptor
                                 }
                                 _ => {
                                     log_debug!(&event_tx_loop, "Received frame type {:?} from client", frame);

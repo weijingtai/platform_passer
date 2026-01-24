@@ -21,6 +21,9 @@ This document tracks the progress of the macOS platform support for the `platfor
 - **Proactive Permission Guidance**:
     - **Active Dialogs**: If Accessibility permissions are missing, the app now uses `AXIsProcessTrustedWithOptions` to programmatically trigger the system Privacy dialog.
     - **Deep Linking**: Enhanced `permissions.rs` with logic to open System Settings directly to the Accessibility and Input Monitoring panes (`x-apple.systempreferences`).
+- **Protocol Observability & File Recovery**:
+    - **Granular Tracing**: Standardized `log_debug!/log_error!` across both `server.rs` and `client.rs`. Every frame type (Heartbeat, Clipboard, FileTransfer) is now explicitly traced during transmission and reception to improve diagnostic capabilities.
+    - **File Receiver Restoration**: Restored the server-side uni-directional stream handler in `server.rs`, which was unintentionally removed, enabling cross-platform file reception into the `downloads/` directory.
 - **Session Reliability (EOF Race Fix)**:
     - Added explicit focus reset (`set_remote(false)`) in the server's session loop upon connection termination (including `Unexpected EOF`). This prevents the server from becoming stuck in a "swallowing" state if the client disconnects abruptly.
 - **Multi-Monitor Coordinate Normalization**:

@@ -69,8 +69,10 @@ pub async fn run_client_session(
     let event_tx_read = event_tx.clone();
     let sink_read = sink.clone();
     let tx_read = tx.clone();
+    let (err_tx, mut err_rx) = mpsc::channel::<()>(1);
     tokio::spawn(async move {
         read_frame_loop(recv, event_tx_read, sink_read, tx_read).await;
+        let _ = err_tx.send(()).await;
     });
 
     // 6. Start Clipboard Listener
@@ -131,10 +133,17 @@ pub async fn run_client_session(
             }
             // Priority 2: Outbound Frames (Clipboard, Heartbeat, etc.)
             Some(frame) = rx.recv() => {
+                let frame_type = format!("{:?}", frame);
                 if let Err(e) = write_frame(&mut send, &frame).await {
-                    log_error!(&event_tx, "Failed to send frame {:?} to server: {}. Terminating session.", frame, e);
+                    let _ = log_error!(&event_tx, "Failed to send frame {} to server: {}. Terminating session.", frame_type, e);
                     break;
                 }
+                let _ = log_debug!(&event_tx, "Successfully sent frame type: {}", frame_type);
+            }
+            // Control Channel: Reader loop terminated
+            _ = err_rx.recv() => {
+                let _ = log_warn!(&event_tx, "Read loop terminated unexpectedly. Closing outbound stream.");
+                break;
             }
         }
     }
