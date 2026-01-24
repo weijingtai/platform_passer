@@ -132,7 +132,7 @@ pub async fn run_client_session(
             // Priority 2: Outbound Frames (Clipboard, Heartbeat, etc.)
             Some(frame) = rx.recv() => {
                 if let Err(e) = write_frame(&mut send, &frame).await {
-                    let _ = log_error!(&event_tx, "Failed to send frame to server: {}. Terminating session.", e);
+                    log_error!(&event_tx, "Failed to send frame {:?} to server: {}. Terminating session.", frame, e);
                     break;
                 }
             }

@@ -93,77 +93,48 @@ async fn handle_connection(
         let connection_clone = connection.clone();
         let event_tx_loop = event_tx.clone();
 
+        log_debug!(&event_tx_loop, "Entering protocol loop for {}", remote_addr);
         loop {
             tokio::select! {
                 // Read from client
                 res = read_frame(&mut recv) => {
                     match res {
-                        Ok(Some(Frame::Clipboard(ClipboardEvent::Text(text)))) => {
-                            log_debug!(&event_tx_loop, "Received clipboard text ({} chars)", text.len());
-                            if let Err(e) = clip.set_text(text) {
-                               log_error!(&event_tx_loop, "Failed to set clipboard: {}", e);
-                            }
-                        }
-                        Ok(Some(Frame::Heartbeat(hb))) => {
-                            // Echo back heartbeats
-                            if let Err(e) = write_frame(&mut send, &Frame::Heartbeat(hb)).await {
-                                log_error!(&event_tx_loop, "Failed to echo heartbeat: {}", e);
-                                break;
-                            }
-                        }
-                        Ok(Some(Frame::FileTransferRequest(req))) => {
-                            let _ = log_info!(&event_tx_loop, "File transfer request: {} ({} bytes)", req.filename, req.file_size);
-                            // ... existing logic ...
-                            let resp = Frame::FileTransferResponse(FileTransferResponse {
-                                id: req.id,
-                                accepted: true,
-                            });
-                            if let Err(e) = write_frame(&mut send, &resp).await {
-                                log_error!(&event_tx_loop, "Failed to send response: {}", e);
-                                break;
-                            }
-                            
-                            if let Ok(mut uni_recv) = connection_clone.accept_uni().await {
-                                // ... spawn file task ...
-                                let tx_file = event_tx_loop.clone();
-                                let filename_clone = req.filename.clone();
-                                tokio::spawn(async move {
-                                    let download_dir = std::path::Path::new("downloads");
-                                    let _ = tokio::fs::create_dir_all(download_dir).await;
-                                    let file_path = download_dir.join(&filename_clone);
-                                    if let Ok(mut file) = File::create(&file_path).await {
-                                        match tokio::io::copy(&mut uni_recv, &mut file).await {
-                                            Ok(n) => { log_info!(&tx_file, "Saved file: {} ({} bytes)", filename_clone, n); }
-                                            Err(e) => { log_error!(&tx_file, "Save failed ({}): {}", filename_clone, e); }
-                                        }
+                        Ok(Some(frame)) => {
+                            match frame {
+                                Frame::Clipboard(ClipboardEvent::Text(text)) => {
+                                    log_debug!(&event_tx_loop, "Received clipboard text ({} chars)", text.len());
+                                    if let Err(e) = clip.set_text(text) {
+                                       log_error!(&event_tx_loop, "Failed to set clipboard: {}", e);
                                     }
-                                });
+                                }
+                                Frame::Heartbeat(hb) => {
+                                    if let Err(e) = write_frame(&mut send, &Frame::Heartbeat(hb)).await {
+                                        log_error!(&event_tx_loop, "Failed to echo heartbeat: {}. Terminating.", e);
+                                        break;
+                                    }
+                                }
+                                Frame::FileTransferRequest(req) => {
+                                   log_info!(&event_tx_loop, "File transfer request: {} ({} bytes)", req.filename, req.file_size);
+                                   let resp = Frame::FileTransferResponse(FileTransferResponse {
+                                       id: req.id,
+                                       accepted: true,
+                                   });
+                                   if let Err(e) = write_frame(&mut send, &resp).await {
+                                       log_error!(&event_tx_loop, "Failed to send file response: {}", e);
+                                       break;
+                                   }
+                                }
+                                _ => {
+                                    log_debug!(&event_tx_loop, "Received frame type {:?} from client", frame);
+                                }
                             }
                         }
-                        Ok(Some(_)) => {}
                         Ok(None) => {
-                            let _ = log_info!(&event_tx_loop, "Client closed protocol stream.");
+                            log_info!(&event_tx_loop, "Client closed protocol stream normally.");
                             break;
                         }
                         Err(e) => {
-                            // Check if it's a disconnection-related error
-                            let is_disconnect = if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
-                                matches!(
-                                    io_err.kind(),
-                                    std::io::ErrorKind::UnexpectedEof | 
-                                    std::io::ErrorKind::ConnectionReset | 
-                                    std::io::ErrorKind::BrokenPipe |
-                                    std::io::ErrorKind::TimedOut
-                                )
-                            } else {
-                                false
-                            };
-
-                            if is_disconnect {
-                                let _ = log_info!(&event_tx_loop, "Client disconnected (Stream closed).");
-                            } else {
-                                let _ = log_error!(&event_tx_loop, "Protocol stream error: {}", e);
-                            }
+                            log_error!(&event_tx_loop, "Protocol stream READ error from client: {}. Breaking session.", e);
                             break;
                         }
                     }
@@ -171,15 +142,16 @@ async fn handle_connection(
                 // Send inputs to client
                 Ok(event) = input_rx.recv() => {
                     if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
-                        log_info!(&event_tx_loop, "Switching focus to {:?}", side);
+                        log_info!(&event_tx_loop, "Processing ScreenSwitch to {:?}", side);
                     }
                     if let Err(e) = write_frame(&mut send, &Frame::Input(event)).await {
-                        let _ = log_error!(&event_tx_loop, "Failed to send input to client: {}. Breaking session.", e);
+                        log_error!(&event_tx_loop, "Failed to send input to client: {}. Connection likely closed.", e);
                         break;
                     }
                 }
             }
         }
+        log_debug!(&event_tx_loop, "Protocol loop terminated for {}. Cleaning up.", remote_addr);
     }
     
     let _ = log_info!(&event_tx, "Server connection terminated. Resetting focus to Local.");
