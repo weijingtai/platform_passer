@@ -26,18 +26,23 @@ impl MacosInputSource {
 }
 
 
-fn show_notification(text: &str) {
-    let t = text.to_string();
-    thread::spawn(move || {
-        let _ = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(format!("display notification \"{}\" with title \"Platform Passer\"", t))
-            .output();
-    });
+// fn show_notification(text: &str) {
+//     let t = text.to_string();
+//     thread::spawn(move || {
+//         let _ = std::process::Command::new("osascript")
+//             .arg("-e")
+//             .arg(format!("display notification \"{}\" with title \"Platform Passer\"", t))
+//             .output();
+//     });
+// }
+
+fn show_notification(_text: &str) {
+    // Disabled to prevent potential crashes during debugging
 }
 
 fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
     let is_remote = IS_REMOTE.load(Ordering::SeqCst);
+    // println!("DEBUG: Event {:?}, Remote: {}", etype, is_remote); // Too verbose?
 
     match etype {
         CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
@@ -234,7 +239,11 @@ impl InputSource for MacosInputSource {
                         }
                     }
                 },
-            ).map_err(|_| anyhow!("Failed to create event tap. Check Accessibility permissions."))?;
+            ).map_err(|e| {
+                println!("ERROR: Failed to create CGEventTap: {:?}", e); // Debug print
+                anyhow!("Failed to create event tap: {:?}", e)
+            })?;
+            println!("DEBUG: CGEventTap created successfully.");
 
             let loop_source = tap.mach_port.create_runloop_source(0).map_err(|_| anyhow!("Failed to create runloop source"))?;
             
