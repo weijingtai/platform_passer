@@ -8,7 +8,7 @@ use platform_passer_input::{InputSink, DefaultInputSink, InputSource, DefaultInp
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{self, Sender, Receiver};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
@@ -31,10 +31,26 @@ pub async fn run_client_session(
     let clip_log = event_tx.clone();
     let clipboard = DefaultClipboard::new();
     
+    // Loop Protection: Store last received content hash/string to avoid echo
+    let last_remote_clip = Arc::new(Mutex::new(None::<String>));
+    let last_remote_clip_listener = last_remote_clip.clone();
+
     if let Err(e) = clipboard.start_listener(Box::new(move || {
         if let Ok(text) = DefaultClipboard::new().get_text() {
             if !text.is_empty() {
-                let _ = clip_tx.blocking_send(Frame::Clipboard(ClipboardEvent::Text(text)));
+                // Check if this matches what we just received from server
+                let should_send = if let Ok(lock) = last_remote_clip_listener.lock() {
+                    match &*lock {
+                        Some(last) => *last != text,
+                        None => true,
+                    }
+                } else {
+                    true
+                };
+
+                if should_send {
+                     let _ = clip_tx.blocking_send(Frame::Clipboard(ClipboardEvent::Text(text)));
+                }
             }
         }
     })) {
@@ -166,6 +182,10 @@ pub async fn run_client_session(
                                                 }
                                                 Frame::Clipboard(ClipboardEvent::Text(text)) => {
                                                     log_info!(&event_tx, "Clipboard sync from server.");
+                                                    // Update loop protection BEFORE setting text
+                                                    if let Ok(mut lock) = last_remote_clip.lock() {
+                                                        *lock = Some(text.clone());
+                                                    }
                                                     let _ = DefaultClipboard::new().set_text(text);
                                                 }
                                                 Frame::Heartbeat(_) => {},

@@ -99,11 +99,11 @@ pub fn macos_to_windows_vk(macos_code: u32) -> u32 {
         121 => 0x22, // Page Down
         
         // Modifiers
-        55 => 0x5B, // Command -> Windows Key
+        55 => 0x11, // Command -> Control (for Ctrl+C/V behavior on Windows)
         56 => 0x10, // Shift
         57 => 0x14, // Caps Lock
         58 => 0x12, // Option -> Alt
-        59 => 0x11, // Control
+        59 => 0x5B, // Control -> Windows Key
         
         // Arrows
         123 => 0x25, // Left
