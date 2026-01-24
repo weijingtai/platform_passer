@@ -188,6 +188,19 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             // Return to Local: Triggered when Virtual Cursor hits RIGHT edge of Windows
             // Use 0.998 threshold.
             if is_remote && check_x >= 0.998 {
+                // Restore cursor to Left Edge (Topology: Windows | macOS)
+                // Use x=10.0 as a safe buffer.
+                // Restore Y from Virtual Cursor to maintain continuity.
+                let return_y = if let Ok(vc) = VIRTUAL_CURSOR.lock() { vc.1 } else { 0.5 };
+                
+                unsafe {
+                    let edge_pos = core_graphics::geometry::CGPoint { 
+                        x: 10.0, 
+                        y: (return_y * max_height) as f64
+                    };
+                    let _ = CGWarpMouseCursorPosition(edge_pos);
+                }
+
                 MacosInputSource::set_remote(false);
                 is_remote = false;
                 
