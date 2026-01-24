@@ -16,11 +16,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, MSG, WNDCLASSW, WS_OVERLAPPEDWINDOW, WM_CLIPBOARDUPDATE, WM_DESTROY,
     HMENU, WINDOW_EX_STYLE,
 };
+use arboard::{Clipboard, ImageData};
+use std::borrow::Cow;
+use image::ImageOutputFormat;
 
 const CF_UNICODETEXT: u32 = 13;
 
 static REGISTER_CLASS: Once = Once::new();
 static GLOBAL_CALLBACK: Mutex<Option<Box<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+use std::sync::atomic::{AtomicUsize, Ordering};
+static IGNORE_EVENTS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct WindowsClipboard;
 
@@ -32,77 +37,50 @@ impl WindowsClipboard {
 
 impl ClipboardProvider for WindowsClipboard {
     fn get_text(&self) -> Result<String> {
-        unsafe {
-            OpenClipboard(HWND(0)).map_err(|e| anyhow!("Failed to open clipboard: {}", e))?;
-            
-            struct Closer;
-            impl Drop for Closer {
-                fn drop(&mut self) { unsafe { let _ = CloseClipboard(); } }
-            }
-            let _closer = Closer;
-
-            let handle = GetClipboardData(CF_UNICODETEXT).map_err(|e| anyhow!("GetClipboardData failed: {}", e))?;
-            if handle.is_invalid() {
-                return Ok(String::new());
-            }
-
-            let hglobal = HGLOBAL(handle.0 as *mut _);
-            let ptr = GlobalLock(hglobal);
-            if ptr.is_null() {
-                return Err(anyhow!("GlobalLock failed"));
-            }
-
-            let mut len = 0;
-            let ptr_u16 = ptr as *const u16;
-            while *ptr_u16.add(len) != 0 {
-                len += 1;
-            }
-            let slice = std::slice::from_raw_parts(ptr_u16, len);
-            let s = String::from_utf16_lossy(slice);
-            
-            let _ = GlobalUnlock(hglobal).is_ok();
-            Ok(s)
-        }
+        let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Failed to init clipboard: {}", e))?;
+        clipboard.get_text().map_err(|e| anyhow!("Failed to get text: {}", e))
     }
 
     fn set_text(&self, text: String) -> Result<()> {
-        unsafe {
-            OpenClipboard(HWND(0)).map_err(|e| anyhow!("Failed to open clipboard: {}", e))?;
+        IGNORE_EVENTS.fetch_add(1, Ordering::SeqCst);
+        let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Failed to init clipboard: {}", e))?;
+        clipboard.set_text(text).map_err(|e| anyhow!("Failed to set text: {}", e))
+    }
+
+    fn get_image(&self) -> Result<Option<Vec<u8>>> {
+        let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Init failed: {}", e))?;
+        if let Ok(image) = clipboard.get_image() {
+            // Convert RGBA to PNG
+            let mut buf = Vec::new();
+            let safe_image = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+                image.width as u32, 
+                image.height as u32, 
+                image.bytes.into_owned()
+            ).ok_or(anyhow!("Invalid image buffer"))?;
             
-            struct Closer;
-            impl Drop for Closer {
-                fn drop(&mut self) { unsafe { let _ = CloseClipboard(); } }
-            }
-            let _closer = Closer;
-
-            EmptyClipboard().map_err(|e| anyhow!("EmptyClipboard failed: {}", e))?;
-
-            let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-            let size = utf16.len() * 2;
-            
-            let hglobal = GlobalAlloc(GMEM_MOVEABLE, size).map_err(|e| anyhow!("GlobalAlloc failed: {}", e))?;
-            if hglobal.is_invalid() {
-                return Err(anyhow!("GlobalAlloc returned invalid handle"));
-            }
-
-            let ptr = GlobalLock(hglobal);
-            if ptr.is_null() {
-                let _ = GlobalFree(hglobal);
-                return Err(anyhow!("GlobalLock failed"));
-            }
-
-            std::ptr::copy_nonoverlapping(utf16.as_ptr(), ptr as *mut u16, utf16.len());
-
-            let _ = GlobalUnlock(hglobal).is_ok();
-
-            let handle = HANDLE(hglobal.0 as isize);
-            if let Err(e) = SetClipboardData(CF_UNICODETEXT, handle) {
-                let _ = GlobalFree(hglobal);
-                return Err(anyhow!("SetClipboardData failed: {}", e));
-            }
-            
-            Ok(())
+            let mut cursor = std::io::Cursor::new(&mut buf);
+            safe_image.write_to(&mut cursor, ImageOutputFormat::Png)?;
+            Ok(Some(buf))
+        } else {
+            Ok(None)
         }
+    }
+
+    fn set_image(&self, png_data: Vec<u8>) -> Result<()> {
+        IGNORE_EVENTS.fetch_add(1, Ordering::SeqCst);
+        let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Init failed: {}", e))?;
+        let img = image::load_from_memory(&png_data)?.to_rgba8();
+        let width = img.width() as usize;
+        let height = img.height() as usize;
+        let raw = img.into_raw();
+        
+        let image_data = ImageData {
+            width,
+            height,
+            bytes: Cow::from(raw),
+        };
+        clipboard.set_image(image_data).map_err(|e| anyhow!("Set image failed: {}", e))?;
+        Ok(())
     }
 
     fn start_listener(&self, callback: Box<dyn Fn() + Send + Sync>) -> Result<()> {
@@ -165,6 +143,10 @@ impl ClipboardProvider for WindowsClipboard {
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_CLIPBOARDUPDATE => {
+            if IGNORE_EVENTS.load(Ordering::SeqCst) > 0 {
+                IGNORE_EVENTS.fetch_sub(1, Ordering::SeqCst);
+                return LRESULT(0);
+            }
             if let Ok(guard) = GLOBAL_CALLBACK.lock() {
                 if let Some(cb) = &*guard {
                     cb();

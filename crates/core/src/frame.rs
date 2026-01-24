@@ -35,14 +35,17 @@ pub struct FileTransferResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ClipboardEvent {
     Text(String),
-    // Future: Image, Files
+    Image { data: Vec<u8> }, // PNG encoded
 }
+
+use crate::config::ScreenInfo;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Handshake {
     pub version: u32,
     pub client_id: String,
     pub capabilities: Vec<String>,
+    pub screen_info: Option<ScreenInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

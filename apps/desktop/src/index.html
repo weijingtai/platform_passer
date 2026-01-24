@@ -24,6 +24,7 @@
     <div class="tabs">
       <div class="tab active" onclick="switchTab('client')">Client Mode</div>
       <div class="tab" onclick="switchTab('server')">Server Mode</div>
+      <div class="tab" onclick="switchTab('settings')">Settings</div>
     </div>
 
     <!-- Client View -->
@@ -67,6 +68,48 @@
       </div>
 
       <button onclick="startServer()">Start Server</button>
+    </div>
+
+    <!-- Settings View -->
+    <div id="settings-view" class="view-content hidden">
+      <h3>Screen Layout</h3>
+      <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 1rem;">
+        Drag and drop remote screens relative to the local screen.
+      </p>
+
+      <div class="topology-container" id="topology-editor">
+        <div class="drop-zone" data-pos="Top"></div>
+        <div class="middle-row">
+          <div class="drop-zone" data-pos="Left"></div>
+          <div class="screen-box local">This PC</div>
+          <div class="drop-zone" data-pos="Right"></div>
+        </div>
+        <div class="drop-zone" data-pos="Bottom"></div>
+      </div>
+
+      <div class="settings-group">
+        <label>Input Sensitivity</label>
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <input type="range" id="cursor-speed" min="0.5" max="3.0" step="0.1" value="1.0"
+            onchange="updateConfigValue('speed', this.value)">
+          <span id="speed-val">1.0x</span>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <label class="checkbox-container">
+          <input type="checkbox" id="sync-clipboard" onchange="updateConfigValue('clipboard', this.checked)" checked>
+          <span class="checkmark"></span>
+          Sync Clipboard
+        </label>
+        <label class="checkbox-container">
+          <input type="checkbox" id="sync-images" onchange="updateConfigValue('images', this.checked)">
+          <span class="checkmark"></span>
+          Sync Images (High Bandwidth)
+        </label>
+      </div>
+
+      <button onclick="saveCurrentConfig()" style="margin-top: 1rem;">Save Configuration</button>
     </div>
 
     <!-- Status Log -->
@@ -128,12 +171,21 @@
       const activeTab = document.querySelector(`.tab[onclick*="switchTab('${tab}')"]`);
       if (activeTab) activeTab.classList.add('active');
 
+      const clientView = document.getElementById('client-view');
+      const serverView = document.getElementById('server-view');
+      const settingsView = document.getElementById('settings-view');
+
+      clientView.classList.add('hidden');
+      serverView.classList.add('hidden');
+      settingsView.classList.add('hidden');
+
       if (tab === 'client') {
-        document.getElementById('client-view').classList.remove('hidden');
-        document.getElementById('server-view').classList.add('hidden');
-      } else {
-        document.getElementById('client-view').classList.add('hidden');
-        document.getElementById('server-view').classList.remove('hidden');
+        clientView.classList.remove('hidden');
+      } else if (tab === 'settings') {
+        settingsView.classList.remove('hidden');
+        loadConfig();
+      } else { // server
+        serverView.classList.remove('hidden');
 
         // Check accessibility permissions
         if (invoke) {
@@ -227,10 +279,100 @@
       }
     }
 
-    window.__TAURI__.event.listen('session-event', (event) => {
-      const { event_type, message } = event.payload;
-      log(message);
-      updateStatus(event_type, message);
+
+
+    // --- Settings Logic ---
+    let currentConfig = {
+      topology: { local: { width: 1920, height: 1080, dpi_scale: 1.0 }, remotes: [] },
+      input: { cursor_speed_multiplier: 1.0, maintain_aspect_ratio: true },
+      clipboard: { sync_enabled: true, sync_images: false }
+    };
+
+    function updateConfigValue(key, value) {
+      if (key === 'speed') {
+        currentConfig.input.cursor_speed_multiplier = parseFloat(value);
+        document.getElementById('speed-val').innerText = value + 'x';
+      } else if (key === 'clipboard') {
+        currentConfig.clipboard.sync_enabled = value;
+      } else if (key === 'images') {
+        currentConfig.clipboard.sync_images = value;
+      }
+    }
+
+    async function loadConfig() {
+      if (!invoke) return;
+      try {
+        const config = await invoke('get_config');
+        currentConfig = config;
+
+        // UI Update
+        document.getElementById('cursor-speed').value = config.input.cursor_speed_multiplier;
+        document.getElementById('speed-val').innerText = config.input.cursor_speed_multiplier + 'x';
+        document.getElementById('sync-clipboard').checked = config.clipboard.sync_enabled;
+        document.getElementById('sync-images').checked = config.clipboard.sync_images;
+
+        renderTopology(config.topology);
+      } catch (e) {
+        log(`Config Load Error: ${e}`);
+      }
+    }
+
+    async function saveCurrentConfig() {
+      if (!invoke) return;
+      try {
+        // Reconstruct remotes from DOM state
+        const remotes = [];
+        document.querySelectorAll('.drop-zone.active').forEach(zone => {
+          const posStr = zone.getAttribute('data-pos');
+          // Simple mapping: 1 remote per config supported for now in this basic UI
+          // In a real app, we'd map specific IDs. Here we assume "Generic Remote"
+          remotes.push({
+            id: "remote-1",
+            position: posStr, // "Left", "Right", "Top", "Bottom"
+            info: { width: 1920, height: 1080, dpi_scale: 1.0 } // Placeholder
+          });
+        });
+        currentConfig.topology.remotes = remotes;
+
+        await invoke('save_config', { config: currentConfig });
+        log("Configuration saved!");
+      } catch (e) {
+        log(`Config Save Error: ${e}`);
+      }
+    }
+
+    function renderTopology(topology) {
+      // Clear active zones
+      document.querySelectorAll('.drop-zone').forEach(el => {
+        el.classList.remove('active');
+        el.innerText = '';
+      });
+
+      // Populate from config
+      topology.remotes.forEach(remote => {
+        const zone = document.querySelector(`.drop-zone[data-pos="${remote.position}"]`);
+        if (zone) {
+          zone.classList.add('active');
+          zone.innerText = "Remote";
+        }
+      });
+    }
+
+    // Basic Click-to-Toggle Topology (simplification of Drag-Drop for MVP)
+    document.querySelectorAll('.drop-zone').forEach(zone => {
+      zone.addEventListener('click', () => {
+        // Toggle active state
+        if (zone.classList.contains('active')) {
+          zone.classList.remove('active');
+          zone.innerText = '';
+        } else {
+          // For MVP, only allow one remote? Or multiple? Let's allow multiple.
+          // But typically only one active edge makes sense per side.
+          // Reset others if we want exclusive single remote? No, user might have multiple screens.
+          zone.classList.add('active');
+          zone.innerText = "Remote";
+        }
+      });
     });
 
     window.addEventListener('DOMContentLoaded', () => {

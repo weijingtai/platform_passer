@@ -74,8 +74,9 @@ async fn handle_protocol_session(
                 log_info!(&event_tx, "Received handshake (Client: {})", h.client_id);
                 let resp = Frame::Handshake(Handshake {
                     version: 1,
-                    client_id: "macos-server".to_string(),
+                    client_id: "macos-server".to_string(), // TODO: Make dynamic
                     capabilities: vec!["input".to_string(), "clipboard".to_string()],
+                    screen_info: None,
                 });
                 ws_sink.send(Message::Binary(bincode::serialize(&resp)?)).await?;
             }

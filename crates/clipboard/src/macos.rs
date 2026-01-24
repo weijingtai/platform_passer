@@ -1,5 +1,11 @@
 use crate::ClipboardProvider;
 use anyhow::Result;
+use arboard::{Clipboard, ImageData};
+use std::borrow::Cow;
+use image::ImageOutputFormat;
+use anyhow::anyhow;
+// Keep other imports for listener if needed, but we can potentially replace get/set with arboard too?
+// For consistency, let's keep listener native and get/set via arboard.
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSString, NSAutoreleasePool};
 use objc::{msg_send, sel, sel_impl};
@@ -14,31 +20,47 @@ impl MacosClipboard {
 
 impl ClipboardProvider for MacosClipboard {
     fn get_text(&self) -> Result<String> {
-        unsafe {
-            let _pool = NSAutoreleasePool::new(nil);
-            let ns_pasteboard: id = msg_send![objc::class!(NSPasteboard), generalPasteboard];
-            let ns_string: id = msg_send![ns_pasteboard, stringForType: cocoa::appkit::NSPasteboardTypeString];
-            
-            if ns_string == nil {
-                return Ok(String::new());
-            }
-            
-            let char_ptr: *const std::os::raw::c_char = msg_send![ns_string, UTF8String];
-            let c_str = std::ffi::CStr::from_ptr(char_ptr);
-            Ok(c_str.to_string_lossy().into_owned())
-        }
+        let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Failed to init clipboard: {}", e))?;
+        clipboard.get_text().map_err(|e| anyhow!("Failed to get text: {}", e))
     }
 
     fn set_text(&self, text: String) -> Result<()> {
-        unsafe {
-            let _pool = NSAutoreleasePool::new(nil);
-            let ns_pasteboard: id = msg_send![objc::class!(NSPasteboard), generalPasteboard];
-            let ns_string = NSString::alloc(nil).init_str(&text);
+        let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Failed to init clipboard: {}", e))?;
+        clipboard.set_text(text).map_err(|e| anyhow!("Failed to set text: {}", e))
+    }
+
+    fn get_image(&self) -> Result<Option<Vec<u8>>> {
+        let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Init failed: {}", e))?;
+        if let Ok(image) = clipboard.get_image() {
+            let mut buf = Vec::new();
+            let safe_image = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+                image.width as u32, 
+                image.height as u32, 
+                image.bytes.into_owned()
+            ).ok_or(anyhow!("Invalid image buffer"))?;
             
-            let _: () = msg_send![ns_pasteboard, clearContents];
-            let _: bool = msg_send![ns_pasteboard, setString:ns_string forType: cocoa::appkit::NSPasteboardTypeString];
-            Ok(())
+            let mut cursor = std::io::Cursor::new(&mut buf);
+            safe_image.write_to(&mut cursor, ImageOutputFormat::Png)?;
+            Ok(Some(buf))
+        } else {
+            Ok(None)
         }
+    }
+
+    fn set_image(&self, png_data: Vec<u8>) -> Result<()> {
+        let mut clipboard = Clipboard::new().map_err(|e| anyhow!("Init failed: {}", e))?;
+        let img = image::load_from_memory(&png_data)?.to_rgba8();
+        let width = img.width() as usize;
+        let height = img.height() as usize;
+        let raw = img.into_raw();
+        
+        let image_data = ImageData {
+            width,
+            height,
+            bytes: Cow::from(raw),
+        };
+        clipboard.set_image(image_data).map_err(|e| anyhow!("Set image failed: {}", e))?;
+        Ok(())
     }
 
     fn start_listener(&self, callback: Box<dyn Fn() + Send + Sync>) -> Result<()> {

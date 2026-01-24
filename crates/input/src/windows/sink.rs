@@ -7,7 +7,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
 };
-use std::mem::size_of;
+use std::sync::Mutex;
+use platform_passer_core::config::AppConfig;
+use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+static SINK_CONFIG: Mutex<Option<AppConfig>> = Mutex::new(None);
+static LAST_SOURCE_POS: Mutex<Option<(f32, f32)>> = Mutex::new(None);
 
 pub struct WindowsInputSink;
 
@@ -37,11 +42,50 @@ impl InputSink for WindowsInputSink {
                 };
             }
             InputEvent::MouseMove { x, y } => {
+                // Calculate Speed-Scaled Target
+                let speed = if let Ok(guard) = SINK_CONFIG.lock() {
+                    guard.as_ref().map(|c| c.input.cursor_speed_multiplier).unwrap_or(1.0)
+                } else { 1.0 };
+
+                let mut dx = 0.0;
+                let mut dy = 0.0;
+                
+                // Calculate deltas from source stream
+                if let Ok(mut last_guard) = LAST_SOURCE_POS.lock() {
+                    if let Some((lx, ly)) = *last_guard {
+                        dx = x - lx;
+                        dy = y - ly;
+                    }
+                    *last_guard = Some((x, y));
+                }
+
+                // Get current local cursor details
+                let screen_width = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN) } as f32;
+                let screen_height = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN) } as f32;
+                
+                let mut point = windows::Win32::Foundation::POINT::default();
+                unsafe { GetCursorPos(&mut point); }
+                
+                // Apply scaling (delta * screen_size * speed)
+                // Note: Protocol x,y is 0-1. 
+                let move_x = dx * screen_width * speed;
+                let move_y = dy * screen_height * speed;
+
+                let target_x = point.x as f32 + move_x;
+                let target_y = point.y as f32 + move_y;
+                
+                // Clamp
+                let target_x = target_x.clamp(0.0, screen_width);
+                let target_y = target_y.clamp(0.0, screen_height);
+                
+                // Convert back to Absolute 0-65535
+                let abs_x = (target_x / screen_width * 65535.0) as i32;
+                let abs_y = (target_y / screen_height * 65535.0) as i32;
+
                 input.r#type = INPUT_MOUSE;
-                // Normalized (0-1) to Windows absolute (0-65535)
                 input.Anonymous.mi = MOUSEINPUT {
-                    dx: (x * 65535.0) as i32,
-                    dy: (y * 65535.0) as i32,
+                    dx: abs_x,
+                    dy: abs_y,
                     mouseData: 0,
                     dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
                     time: 0,
@@ -112,6 +156,12 @@ impl InputSink for WindowsInputSink {
                 return Err(anyhow!("SendInput failed"));
             }
         }
+        Ok(())
+    }
+
+    fn update_config(&self, config: AppConfig) -> Result<()> {
+        let mut guard = SINK_CONFIG.lock().unwrap();
+        *guard = Some(config);
         Ok(())
     }
 }
