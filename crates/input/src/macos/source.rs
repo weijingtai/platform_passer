@@ -6,18 +6,27 @@ use std::thread;
 use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
 use core_graphics::event::{CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType};
 
-use std::sync::atomic::{AtomicBool, Ordering};
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventTapEnable(tap: *mut std::ffi::c_void, enable: bool);
+}
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 static IS_REMOTE: AtomicBool = AtomicBool::new(false);
 static VIRTUAL_CURSOR: Mutex<(f32, f32)> = Mutex::new((0.0, 0.0));
+static DISPLAY_CACHE: Mutex<Option<(f32, f32)>> = Mutex::new(None);
 
-pub struct MacosInputSource;
+pub struct MacosInputSource {
+    run_loop: Arc<Mutex<Option<CFRunLoop>>>,
+}
 
 impl MacosInputSource {
     pub fn new() -> Self {
-        Self
+        Self {
+            run_loop: Arc::new(Mutex::new(None)),
+        }
     }
 
     pub fn set_remote(remote: bool) {
@@ -59,24 +68,19 @@ fn get_display_bounds() -> (f32, f32) {
     }
 }
 
-// fn show_notification(text: &str) {
-//     let t = text.to_string();
-//     thread::spawn(move || {
-//         let _ = std::process::Command::new("osascript")
-//             .arg("-e")
-//             .arg(format!("display notification \"{}\" with title \"Platform Passer\"", t))
-//             .output();
-//     });
-// }
-
-fn show_notification(_text: &str) {
-    // Disabled to prevent potential crashes during debugging
+fn show_notification(text: &str) {
+    let t = text.to_string();
+    thread::spawn(move || {
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(format!("display notification \"{}\" with title \"Platform Passer\"", t))
+            .output();
+    });
 }
 
 fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
     let is_remote = IS_REMOTE.load(Ordering::SeqCst);
     let (max_width, max_height) = get_display_bounds();
-    // println!("DEBUG: Event {:?}, Remote: {}", etype, is_remote); // Too verbose?
 
     match etype {
         CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
@@ -109,7 +113,6 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                     
                     check_x = vc.0;
                 }
-                // If lock fails (poisoned), we just stick with last check_x (which might be abs_x, risking glitch but not crash)
             } else {
                 // Update virtual cursor to match physical when local
                 if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
@@ -127,6 +130,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 }
                 
                 show_notification("Switched to Remote (Windows Left)");
+                tracing::info!("InputSource: Switched to Remote Control (Left Edge -> Windows Right Edge)");
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
             }
             
@@ -135,6 +139,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             if check_x >= 0.995 && is_remote {
                 IS_REMOTE.store(false, Ordering::SeqCst);
                 show_notification("Returned to Local Control");
+                tracing::info!("InputSource: Returned to Local Control (Windows Right Edge -> Left Edge)");
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
             }
 
@@ -162,6 +167,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 _ => platform_passer_core::MouseButton::Middle,
             };
             let is_down = matches!(etype, CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown);
+            tracing::info!("InputSource: Mouse Button {:?} {}", button, if is_down { "Down" } else { "Up" });
             Some(InputEvent::MouseButton { button, is_down })
         }
         CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged => {
@@ -172,6 +178,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             if is_remote && key_code == 53 { // Escape
                  IS_REMOTE.store(false, Ordering::SeqCst);
                  show_notification("Returned to Local Control (Escape)");
+                 tracing::info!("InputSource: Returned to Local Control (Escape)");
                  return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
             }
 
@@ -213,6 +220,8 @@ impl InputSource for MacosInputSource {
     fn start_capture(&self, callback_fn: Box<dyn Fn(InputEvent) + Send + Sync>) -> Result<()> {
         let callback_arc = Arc::new(callback_fn);
         
+        let run_loop_shared = self.run_loop.clone();
+
         thread::spawn(move || {
             let tap = CGEventTap::new(
                 CGEventTapLocation::Session,
@@ -235,13 +244,8 @@ impl InputSource for MacosInputSource {
                 ],
                 move |proxy, etype, event| {
                     match etype {
-                        CGEventType::TapDisabledByTimeout => {
-                            println!("WARNING: CGEventTap disabled by timeout. Re-enabling...");
-                            proxy.enable();
-                            None
-                        }
-                        CGEventType::TapDisabledByUserInput => {
-                            println!("WARNING: CGEventTap disabled by user interaction. Re-enabling...");
+                        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
+                            println!("WARNING: CGEventTap disabled. Re-enabling...");
                             proxy.enable();
                             None
                         }
@@ -268,12 +272,16 @@ impl InputSource for MacosInputSource {
                 println!("ERROR: Failed to create CGEventTap: {:?}", e); // Debug print
                 anyhow!("Failed to create event tap: {:?}", e)
             })?;
-            println!("DEBUG: CGEventTap created successfully.");
 
             let loop_source = tap.mach_port.create_runloop_source(0).map_err(|_| anyhow!("Failed to create runloop source"))?;
             
             unsafe {
                 let run_loop = CFRunLoop::get_current();
+                
+                if let Ok(mut rl) = run_loop_shared.lock() {
+                    *rl = Some(run_loop.clone());
+                }
+
                 run_loop.add_source(&loop_source, kCFRunLoopCommonModes);
                 tap.enable();
                 CFRunLoop::run_current();
@@ -286,6 +294,12 @@ impl InputSource for MacosInputSource {
     }
 
     fn stop_capture(&self) -> Result<()> {
+        if let Ok(mut rl_lock) = self.run_loop.lock() {
+            if let Some(rl) = rl_lock.take() {
+                rl.stop();
+                tracing::info!("InputSource: Capture stopped, run loop terminated.");
+            }
+        }
         Ok(())
     }
 }

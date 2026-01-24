@@ -2545,6 +2545,7 @@ dependencies = [
  "log",
  "objc",
  "platform-passer-core",
+ "tracing",
  "windows 0.52.0",
 ]
 
@@ -2562,6 +2563,7 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

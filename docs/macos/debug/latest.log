@@ -1,7 +1,46 @@
-2026-01-24T02:07:10.811830Z  INFO platform_passer_session::logging: Starting server session on 0.0.0.0:4433
-2026-01-24T02:07:10.812023Z  INFO platform_passer_cli: Starting server session on 0.0.0.0:4433
-2026-01-24T02:07:10.812969Z DEBUG platform_passer_transport::server: Creating server endpoint on 0.0.0.0:4433
-2026-01-24T02:07:10.813567Z DEBUG platform_passer_transport::server: Server ALPN protocols set to: [[112, 112, 47, 49]]
-2026-01-24T02:07:10.814023Z  INFO platform_passer_transport::server: Server endpoint created successfully on 0.0.0.0:4433
-2026-01-24T02:07:10.814033Z  INFO platform_passer_session::logging: QUIC Server listening on 0.0.0.0:4433
-2026-01-24T02:07:10.814126Z  INFO platform_passer_cli: QUIC Server listening on 0.0.0.0:4433
+2026-01-24T02:38:11.035934Z  INFO platform_passer_session::logging: Starting server session on 0.0.0.0:4433
+2026-01-24T02:38:11.036070Z  INFO platform_passer_cli: Starting server session on 0.0.0.0:4433
+2026-01-24T02:38:11.037468Z DEBUG platform_passer_transport::server: Creating server endpoint on 0.0.0.0:4433
+2026-01-24T02:38:11.038343Z DEBUG platform_passer_transport::server: Server ALPN protocols set to: [[112, 112, 47, 49]]
+2026-01-24T02:38:11.038706Z  INFO platform_passer_transport::server: Server endpoint created successfully on 0.0.0.0:4433
+2026-01-24T02:38:11.038715Z  INFO platform_passer_session::logging: QUIC Server listening on 0.0.0.0:4433
+2026-01-24T02:38:11.038735Z  INFO platform_passer_cli: QUIC Server listening on 0.0.0.0:4433
+2026-01-24T02:39:15.411184Z  INFO platform_passer_input::macos::source: InputSource: Switched to Remote Control (Right Edge)
+2026-01-24T02:39:16.844393Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:17.023322Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:39:18.677704Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:18.778029Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:39:19.407893Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:19.407949Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:39:22.302484Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:22.392370Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:39:23.667752Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:23.667826Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:39:27.552683Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:27.673608Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:39:29.269510Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:29.367759Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:39:32.622951Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:32.742654Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:39:43.258009Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:43.258126Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:39:52.423777Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:52.529386Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:39:56.419431Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:39:56.518518Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:40:04.503078Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:40:04.618265Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:40:07.692312Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:40:07.797460Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:40:10.513189Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:40:10.513268Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:40:14.667772Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:40:14.667871Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:40:17.777796Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:40:17.847878Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:40:19.111290Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:40:19.213281Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:40:20.667129Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:40:20.817470Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up
+2026-01-24T02:40:47.961204Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Down
+2026-01-24T02:40:48.043108Z  INFO platform_passer_input::macos::source: InputSource: Mouse Button Left Up

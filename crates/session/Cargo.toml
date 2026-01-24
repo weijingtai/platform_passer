@@ -14,3 +14,4 @@ platform-passer-transport = { path = "../transport" }
 platform-passer-input = { path = "../input" }
 platform-passer-clipboard = { path = "../clipboard" }
 quinn = "0.10"
+tracing-subscriber = "0.3.22"
