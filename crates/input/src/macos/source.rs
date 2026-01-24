@@ -9,6 +9,7 @@ use core_graphics::event::{CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOp
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGEventTapEnable(tap: *mut std::ffi::c_void, enable: bool);
+    fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> u32;
 }
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -34,6 +35,14 @@ impl MacosInputSource {
 
     pub fn set_remote(remote: bool) {
         let old = IS_REMOTE.swap(remote, Ordering::SeqCst);
+        
+        // 1. CoreGraphics Cursor Association (The "Freeze" API)
+        unsafe {
+            // true = cursor moves with mouse (Local)
+            // false = cursor decoupled (Remote)
+            let _ = CGAssociateMouseAndMouseCursorPosition(!remote);
+        }
+
         if old && !remote {
             // Transition from Remote to Local: Start cooling period
             if let Ok(mut lock) = LAST_SWITCH_TIME.lock() {
@@ -132,6 +141,8 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 }
                 
                 println!("DEBUG: [W][M] Entering Windows (Left) from macOS (Right). Triggered at physical x={:.3}. Entry virtual x=0.95", abs_x);
+                // Trigger transition logic immediately
+                MacosInputSource::set_remote(true);
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
             }
             
@@ -261,7 +272,7 @@ impl InputSource for MacosInputSource {
 
         thread::spawn(move || {
             let tap = CGEventTap::new(
-                CGEventTapLocation::Session,
+                CGEventTapLocation::HID,
                 CGEventTapPlacement::HeadInsertEventTap,
                 CGEventTapOptions::Default,
                 vec![
@@ -304,37 +315,44 @@ impl InputSource for MacosInputSource {
                             }
                             
                             let is_remote_now = IS_REMOTE.load(Ordering::SeqCst);
-                            // ... remaining logic ...
                             let buttons_pressed = PRESSED_BUTTONS.load(Ordering::SeqCst) != 0;
                             let in_cooling = if let Ok(lock) = LAST_SWITCH_TIME.lock() {
                                 lock.map_or(false, |t| t.elapsed().as_millis() < 300)
                             } else { false };
 
                             let result = if is_remote_now {
-                                // Steady Remote: Swallow everything
-                                None
+                                // Steady Remote: Swallow EVERYTHING by converting to Null
+                                // This effectively freezes the local cursor and ignores keystrokes
+                                event.set_type(CGEventType::Null);
+                                Some(event.to_owned())
                             } else if was_remote_initially || buttons_pressed || in_cooling {
                                 // Transitioning or Protected period
                                 match etype {
                                     CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
-                                        // Allow moves so cursor can "land"
                                         Some(event.to_owned())
                                     }
-                                    _ => None,
+                                    _ => {
+                                        if matches!(etype, CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged) {
+                                            event.set_type(CGEventType::Null);
+                                            Some(event.to_owned())
+                                        } else {
+                                            None
+                                        }
+                                    }
                                 }
                             } else {
                                 // Steady Local
                                 Some(event.to_owned())
                             };
                             
-                            if result.is_none() {
-                                // Optional: println!("DEBUG: Swallowed event {:?}", etype);
-                            }
                             result
                         }
                     }
                 },
-            ).map_err(|e| anyhow!("Failed to create event tap: {:?}", e))?;
+            ).map_err(|e| {
+                tracing::error!("InputSource: Failed to create HID event tap: {:?}. Is 'Input Monitoring' permission granted?", e);
+                anyhow!("Failed to create HID event tap. Please ensure 'Input Monitoring' permission is enabled for the terminal/app.")
+            })?;
 
             // Store the MachPort pointer
             {
@@ -368,6 +386,10 @@ impl InputSource for MacosInputSource {
             if let Some(rl) = rl_lock.take() {
                 rl.stop();
                 tracing::info!("InputSource: Capture stopped, run loop terminated.");
+                // Ensure cursor is re-associated on stop
+                unsafe {
+                    let _ = CGAssociateMouseAndMouseCursorPosition(true);
+                }
             }
         }
         Ok(())
