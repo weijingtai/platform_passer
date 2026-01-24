@@ -51,6 +51,9 @@ This document outlines the tasks for the macOS developer to ensure parity with t
     - [x] Tightened keep-alive to 5s.
 - [x] **Logging**:
     - [x] Detailed session events forwarded to GUI console.
+- [ ] **Connection Resilience**:
+    - [ ] **Auto-Reconnect**: Implement loop to retry connection if server is unavailable or drops.
+    - [ ] **Startup Independence**: Allow client to start and wait for server, rather than failing immediately.
 
 ### 6. Permissions & UX <!-- id: mac_perms -->
 - [x] **Accessibility Check**:

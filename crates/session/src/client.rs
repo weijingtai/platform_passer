@@ -20,152 +20,197 @@ pub async fn run_client_session(
     mut cmd_rx: Receiver<SessionCommand>,
     event_tx: Sender<SessionEvent>
 ) -> Result<()> {
-    log_info!(&event_tx, "Attempting WebSocket connection to {}", server_addr);
-
-    // 1. Setup WebSocket Client
-    let ws_stream = connect_ws(server_addr).await?;
-    log_info!(&event_tx, "WebSocket connection established with {}", server_addr);
-    let _ = event_tx.send(SessionEvent::Connected(server_addr.to_string())).await;
-
-    let (mut ws_sink, mut ws_stream) = ws_stream.split();
-
-    // 2. Setup Input Sink
+    // 1. Persistent Setup (Clipboard & Input Sink)
+    // These survive across connection retries.
+    let (local_tx, mut local_rx) = mpsc::channel::<Frame>(100);
     let sink = Arc::new(DefaultInputSink::new());
 
-    // 3. Perform Protocol Handshake
-    log_debug!(&event_tx, "Performing application handshake...");
-    let handshake = Frame::Handshake(Handshake {
-        version: 1,
-        client_id: "macos-client".to_string(),
-        capabilities: vec!["input".to_string(), "clipboard".to_string()],
-    });
-    ws_sink.send(Message::Binary(bincode::serialize(&handshake)?)).await?;
+    // Start Clipboard Listener Once
+    let clip_tx = local_tx.clone();
+    let clip_log = event_tx.clone();
+    let clipboard = DefaultClipboard::new();
     
-    match ws_stream.next().await {
-        Some(Ok(Message::Binary(bytes))) => {
-            let resp: Frame = bincode::deserialize(&bytes)?;
-            if matches!(resp, Frame::Handshake(_)) {
-                log_info!(&event_tx, "Protocol handshake successful.");
-            } else {
-                return Err(anyhow::anyhow!("Handshake failed: Invalid frame"));
-            }
-        }
-        _ => return Err(anyhow::anyhow!("Handshake failed: No response")),
-    }
-    
-    // 4. Setup Channel for Outbound
-    let (tx, mut rx) = mpsc::channel::<Frame>(100);
-
-    // 5. Spawn Read Loop in Background
-    let event_tx_read = event_tx.clone();
-    let sink_read = sink.clone();
-    let tx_read = tx.clone();
-    let (err_tx, mut err_rx) = mpsc::channel::<()>(1);
-    tokio::spawn(async move {
-        while let Some(msg) = ws_stream.next().await {
-            match msg {
-                Ok(Message::Binary(bytes)) => {
-                    if let Ok(frame) = bincode::deserialize::<Frame>(&bytes) {
-                        match frame {
-                            Frame::Input(event) => {
-                                if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
-                                    log_info!(&event_tx_read, "Focus switched to {:?}", side);
-                                } else {
-                                    let _ = sink_read.inject_event(event);
-                                }
-                            }
-                            Frame::Clipboard(ClipboardEvent::Text(text)) => {
-                                log_info!(&event_tx_read, "Clipboard sync from server.");
-                                let _ = DefaultClipboard::new().set_text(text);
-                            }
-                            Frame::Heartbeat(hb) => {
-                                let _ = tx_read.send(Frame::Heartbeat(hb)).await;
-                            }
-                            Frame::FileTransferResponse(resp) => {
-                                if resp.accepted {
-                                    log_info!(&event_tx_read, "File transfer accepted by server.");
-                                } else {
-                                    log_warn!(&event_tx_read, "File transfer rejected by server.");
-                                }
-                                // In a full implementation, we'd use this to start/stop the sender loop.
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Ok(Message::Close(_)) => {
-                    log_info!(&event_tx_read, "Connection closed by server.");
-                    break;
-                }
-                Err(e) => {
-                    let _ = log_error!(&event_tx_read, "Read error: {}. Terminating.", e);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        let _ = err_tx.send(()).await;
-        let _ = event_tx_read.send(SessionEvent::Disconnected).await;
-    });
-
-    // 6. Start Heartbeat Task
-    let tx_hb = tx.clone();
-    let hb_tx_log = event_tx.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            let hb = Frame::Heartbeat(Heartbeat {
-                timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-            });
-            if tx_hb.send(hb).await.is_err() { 
-                let _ = log_debug!(&hb_tx_log, "Stopping heartbeat task.");
-                break; 
-            }
-        }
-    });
-
-    // 7. Clipboard Listener
-    let clip = DefaultClipboard::new();
-    let tx_clip = tx.clone();
-    clip.start_listener(Box::new(move || {
+    // We try to start the listener, but if it fails (e.g. platform issue), we log and continue without it.
+    if let Err(e) = clipboard.start_listener(Box::new(move || {
         if let Ok(text) = DefaultClipboard::new().get_text() {
             if !text.is_empty() {
-                let _ = tx_clip.blocking_send(Frame::Clipboard(ClipboardEvent::Text(text)));
+                // Determine if this is a "local" copy or echo. 
+                // Simple logic: just send it. The server/other side should filter echoes if needed or we rely on logic there.
+                // Note: ideally we check if we just received this content to avoid loops.
+                let _ = clip_tx.blocking_send(Frame::Clipboard(ClipboardEvent::Text(text)));
             }
         }
-    }))?;
+    })) {
+        log_error!(&clip_log, "Failed to start clipboard listener: {}", e);
+    }
 
-    // 8. Main Outbound Loop
+    // 2. Main Connection Retry Loop
     loop {
-        tokio::select! {
+        log_info!(&event_tx, "Attempting connection to {}...", server_addr);
+
+        // Attempt connection with ability to abort via UI
+        let connect_fut = connect_ws(server_addr);
+        let stream_result = tokio::select! {
+            res = connect_fut => res,
             Some(cmd) = cmd_rx.recv() => {
-                match cmd {
-                    SessionCommand::Disconnect => {
-                        log_info!(&event_tx, "UI requested disconnection.");
-                        break;
-                    }
-                    _ => {
-                        log_warn!(&event_tx, "Command {:?} not yet supported over WebSocket fully.", cmd);
-                    }
+                if matches!(cmd, SessionCommand::Disconnect) {
+                    log_info!(&event_tx, "Disconnect requested by user.");
+                    return Ok(());
+                }
+                continue; // Ignore other commands while connecting?
+            }
+        };
+
+        match stream_result {
+            Ok(ws_stream) => {
+                log_info!(&event_tx, "Connected to {}.", server_addr);
+                let _ = event_tx.send(SessionEvent::Connected(server_addr.to_string())).await;
+
+                let (mut ws_sink, mut ws_stream) = ws_stream.split();
+
+                // 3. Handshake
+                // We need to handle UI Disconnect during handshake too
+                let handshake = Frame::Handshake(Handshake {
+                    version: 1,
+                    client_id: "macos-client".to_string(), // TODO: Make dynamic?
+                    capabilities: vec!["input".to_string(), "clipboard".to_string()],
+                });
+
+                if let Err(e) = ws_sink.send(Message::Binary(bincode::serialize(&handshake)?)).await {
+                    log_error!(&event_tx, "Handshake send failed: {}", e);
+                    // Trigger retry logic
+                } else {
+                     // Wait for response
+                     let handshake_resp_fut = ws_stream.next();
+                     let handshake_res = tokio::select! {
+                        res = handshake_resp_fut => res,
+                        Some(cmd) = cmd_rx.recv() => {
+                             if matches!(cmd, SessionCommand::Disconnect) {
+                                 return Ok(());
+                             }
+                             None // Ignore
+                        }
+                     };
+
+                     match handshake_res {
+                        Some(Ok(Message::Binary(bytes))) => {
+                            if let Ok(Frame::Handshake(_)) = bincode::deserialize(&bytes) {
+                                log_info!(&event_tx, "Handshake accepted. Session active.");
+                                
+                                // 4. Active Session Loop
+                                // Use a separate channel for heartbeat task to signal it to stop
+                                let (hb_stop_tx, mut hb_stop_rx) = mpsc::channel::<()>(1);
+                                let hb_local_tx = local_tx.clone();
+                                let hb_log = event_tx.clone();
+                                
+                                // Start Heartbeat
+                                tokio::spawn(async move {
+                                    loop {
+                                        tokio::select! {
+                                            _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                                                let hb = Frame::Heartbeat(Heartbeat {
+                                                    timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                                                });
+                                                if hb_local_tx.send(hb).await.is_err() { break; }
+                                            }
+                                            _ = hb_stop_rx.recv() => { break; }
+                                        }
+                                    }
+                                });
+
+                                // Event Loop
+                                loop {
+                                    tokio::select! {
+                                        // A. Outbound (Clipboard, Heartbeat)
+                                        Some(frame) = local_rx.recv() => {
+                                            let bytes = bincode::serialize(&frame)?;
+                                            if let Err(e) = ws_sink.send(Message::Binary(bytes)).await {
+                                                log_error!(&event_tx, "Send failed: {}", e);
+                                                break; // Break inner loop -> Reconnect
+                                            }
+                                        }
+
+                                        // B. Inbound (Network)
+                                        Some(msg_res) = ws_stream.next() => {
+                                            match msg_res {
+                                                Ok(Message::Binary(bytes)) => {
+                                                    if let Ok(frame) = bincode::deserialize::<Frame>(&bytes) {
+                                                        match frame {
+                                                            Frame::Input(event) => {
+                                                                if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
+                                                                    log_info!(&event_tx, "Focus switched to {:?}", side);
+                                                                } else {
+                                                                    let _ = sink.inject_event(event);
+                                                                }
+                                                            }
+                                                            Frame::Clipboard(ClipboardEvent::Text(text)) => {
+                                                                log_info!(&event_tx, "Clipboard sync from server.");
+                                                                // Prevent echo loop? If we set text, listener might fire.
+                                                                // Current impl depends on basic loop prevention or acceptance of one echo. 
+                                                                // Ideally, use `set_text` that suppresses next event or verify content.
+                                                                let _ = DefaultClipboard::new().set_text(text);
+                                                            }
+                                                            Frame::Heartbeat(_) => {}, // Server HB?
+                                                            Frame::FileTransferResponse(resp) => {
+                                                                log_info!(&event_tx, "File transfer accepted: {}", resp.accepted);
+                                                            }
+                                                            _ => {}
+                                                        }
+                                                    }
+                                                }
+                                                Ok(Message::Close(_)) => {
+                                                    log_info!(&event_tx, "Server closed connection.");
+                                                    break; 
+                                                }
+                                                Err(e) => {
+                                                    log_error!(&event_tx, "WebSocket Error: {}", e);
+                                                    break; 
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+
+                                        // C. User Command
+                                        Some(cmd) = cmd_rx.recv() => {
+                                            if matches!(cmd, SessionCommand::Disconnect) {
+                                                log_info!(&event_tx, "Disconnecting...");
+                                                let _ = hb_stop_tx.send(()).await; // Stop HB
+                                                // Optional: Send Close frame
+                                                let _ = ws_sink.close().await;
+                                                return Ok(()); // Full exit
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // Clean up before retry
+                                let _ = hb_stop_tx.send(()).await;
+                                let _ = event_tx.send(SessionEvent::Disconnected).await;
+
+                            } else {
+                                log_error!(&event_tx, "Invalid handshake response.");
+                            }
+                        }
+                        _ => {
+                            log_error!(&event_tx, "Handshake timed out or failed.");
+                        }
+                     }
                 }
             }
-            Some(frame) = rx.recv() => {
-                let frame_type = format!("{:?}", frame);
-                let bytes = bincode::serialize(&frame)?;
-                if let Err(e) = ws_sink.send(Message::Binary(bytes)).await {
-                    let _ = log_error!(&event_tx, "Failed to send frame {}: {}. Terminating.", frame_type, e);
-                    break;
-                }
-                if !frame_type.contains("Heartbeat") {
-                    let _ = log_debug!(&event_tx, "Successfully sent frame type: {}", frame_type);
-                }
+            Err(e) => {
+                // Connection Failed
+                log_error!(&event_tx, "Connection failed: {}. Retrying in 3s...", e);
             }
-            _ = err_rx.recv() => {
-                let _ = log_warn!(&event_tx, "Read loop terminated. Closing session.");
-                break;
+        }
+
+        // Delay with interrupt
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(3)) => {},
+            Some(cmd) = cmd_rx.recv() => {
+                if matches!(cmd, SessionCommand::Disconnect) {
+                    return Ok(());
+                }
             }
         }
     }
-    
-    Ok(())
 }
