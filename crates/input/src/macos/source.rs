@@ -122,28 +122,29 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             // Switch to Remote: Triggered when at macOS LEFT edge
             if !is_remote && abs_x <= 0.002 {
                 IS_REMOTE.store(true, Ordering::SeqCst);
-                is_remote = true; // Update local state for subsequent logic in this call
+                is_remote = true;
                 
                 // Initialize Virtual Cursor at the RIGHT edge of Windows
+                // Use 0.950 to provide SIGNIFICANT hysteresis (avoid immediate return)
                 if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
-                    *vc = (0.990, abs_y); // Slightly away from edge for hysteresis
+                    *vc = (0.950, abs_y);
                     check_x = vc.0;
                 }
                 
-                tracing::info!("InputSource: Layout [W][M]. Entered Windows (Left) from macOS (Right). Start at x=0.99");
+                println!("DEBUG: [W][M] Entering Windows (Left) from macOS (Right). Triggered at physical x={:.3}. Entry virtual x=0.95", abs_x);
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
             }
             
             // Return to Local: Triggered when Virtual Cursor hits RIGHT edge of Windows
+            // Use 0.998 threshold.
             if is_remote && check_x >= 0.998 {
                 MacosInputSource::set_remote(false);
                 is_remote = false;
                 
-                tracing::info!("InputSource: Layout [W][M]. Returned to macOS.");
+                println!("DEBUG: [W][M] Returning to macOS. Triggered at virtual x={:.3}", check_x);
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
             }
 
-            // If not remote, don't send moves
             if !is_remote { return None; }
 
             // Route correct coordinate
@@ -297,43 +298,39 @@ impl InputSource for MacosInputSource {
                             let was_remote_initially = IS_REMOTE.load(Ordering::SeqCst);
 
                             // Process event logic (extraction, sending to client)
-                            if let Some(ev) = handle_event(etype, event) {
+                            let handled_ev = handle_event(etype, event);
+                            if let Some(ev) = handled_ev {
                                 callback_arc(ev);
                             }
                             
                             let is_remote_now = IS_REMOTE.load(Ordering::SeqCst);
-                            
-                            // Multi-layer Protection Logic:
-                            // 1. We are currently remote (is_remote_now).
-                            // 2. We WERE remote but just switched (was_remote_initially && !is_remote_now).
-                            // 3. We are local, but buttons are still physically pressed down from remote mode (button latching).
-                            // 4. We are local, but within the 300ms "Landing Zone" cooling period.
-                            
+                            // ... remaining logic ...
                             let buttons_pressed = PRESSED_BUTTONS.load(Ordering::SeqCst) != 0;
                             let in_cooling = if let Ok(lock) = LAST_SWITCH_TIME.lock() {
                                 lock.map_or(false, |t| t.elapsed().as_millis() < 300)
                             } else { false };
 
-                            if is_remote_now {
+                            let result = if is_remote_now {
                                 // Steady Remote: Swallow everything
                                 None
                             } else if was_remote_initially || buttons_pressed || in_cooling {
                                 // Transitioning or Protected period
                                 match etype {
                                     CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
-                                        // Allow moves so cursor can "land" and user can see where it is
+                                        // Allow moves so cursor can "land"
                                         Some(event.to_owned())
                                     }
-                                    _ => {
-                                        // Swallow everything else (Clicks, Keys, Scroll)
-                                        // This prevents "MouseDown on Remote" -> "EOF/Switch" -> "MouseUp on Local" leakage.
-                                        None
-                                    }
+                                    _ => None,
                                 }
                             } else {
                                 // Steady Local
                                 Some(event.to_owned())
+                            };
+                            
+                            if result.is_none() {
+                                // Optional: println!("DEBUG: Swallowed event {:?}", etype);
                             }
+                            result
                         }
                     }
                 },

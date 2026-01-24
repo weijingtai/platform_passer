@@ -140,13 +140,25 @@ async fn handle_connection(
                     }
                 }
                 // Send inputs to client
-                Ok(event) = input_rx.recv() => {
-                    if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
-                        log_info!(&event_tx_loop, "Processing ScreenSwitch to {:?}", side);
-                    }
-                    if let Err(e) = write_frame(&mut send, &Frame::Input(event)).await {
-                        log_error!(&event_tx_loop, "Failed to send input to client: {}. Connection likely closed.", e);
-                        break;
+                result = input_rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
+                                log_info!(&event_tx_loop, "Processing ScreenSwitch to {:?}", side);
+                            }
+                            if let Err(e) = write_frame(&mut send, &Frame::Input(event)).await {
+                                log_error!(&event_tx_loop, "Failed to send input to client: {}. Connection likely closed.", e);
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            log_warn!(&event_tx_loop, "Server input broadcast LAGGED by {} messages. Skipping some frames.", n);
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            log_error!(&event_tx_loop, "Server input broadcast channel CLOSED. Breaking session.");
+                            break;
+                        }
                     }
                 }
             }
