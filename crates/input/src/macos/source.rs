@@ -4,7 +4,6 @@ use platform_passer_core::InputEvent;
 use std::sync::Arc;
 use std::thread;
 use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
-use core_graphics::display::CGMainDisplayID;
 use core_graphics::event::{CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType};
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +23,16 @@ impl MacosInputSource {
 }
 
 
+fn show_notification(text: &str) {
+    let t = text.to_string();
+    thread::spawn(move || {
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(format!("display notification \"{}\" with title \"Platform Passer\"", t))
+            .output();
+    });
+}
+
 fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
     let is_remote = IS_REMOTE.load(Ordering::SeqCst);
 
@@ -31,15 +40,30 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
         CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
             let point = event.location();
             unsafe {
-                let display_id = CGMainDisplayID();
-                let bounds = core_graphics::display::CGDisplayBounds(display_id);
-                if bounds.size.width > 0.0 && bounds.size.height > 0.0 {
-                    let x = (point.x / bounds.size.width) as f32;
-                    let y = (point.y / bounds.size.height) as f32;
+                // Multi-monitor coordinate calculation
+                let mut max_width = 0.0;
+                let mut max_height = 0.0;
+                
+                let mut display_count: u32 = 0;
+                let mut displays = [0u32; 16];
+                if core_graphics::display::CGGetActiveDisplayList(16, displays.as_mut_ptr(), &mut display_count) == 0 {
+                    for i in 0..display_count {
+                        let bounds = core_graphics::display::CGDisplayBounds(displays[i as usize]);
+                        let right = bounds.origin.x + bounds.size.width;
+                        let bottom = bounds.origin.y + bounds.size.height;
+                        if right > max_width { max_width = right; }
+                        if bottom > max_height { max_height = bottom; }
+                    }
+                }
+
+                if max_width > 0.0 && max_height > 0.0 {
+                    let x = (point.x / max_width) as f32;
+                    let y = (point.y / max_height) as f32;
 
                     // Edge detection for Server -> Client switch
                     if x >= 0.995 && !is_remote {
                         IS_REMOTE.store(true, Ordering::SeqCst);
+                        show_notification("Switched to Remote Control");
                         return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
                     }
                     
@@ -47,6 +71,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                     // (Should usually come from client, but if cursor drifts back...)
                     if x <= 0.005 && is_remote {
                         IS_REMOTE.store(false, Ordering::SeqCst);
+                        show_notification("Returned to Local Control");
                         return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
                     }
 
@@ -77,26 +102,26 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             // Allow this even if remote (it's the escape hatch)
             if is_remote && key_code == 53 { // Escape
                  IS_REMOTE.store(false, Ordering::SeqCst);
+                 show_notification("Returned to Local Control (Escape)");
                  return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
             }
 
             if !is_remote { return None; }
 
-            let is_down = if etype == CGEventType::FlagsChanged {
-                let flags = event.get_flags();
-                // Check if any of the modifier bits are set
-                // (Very simplified: if the keycode is a modifier, we just check the mask)
-                let mask = match key_code {
-                    56 | 60 => 0x00020000, // Shift (Left/Right)
-                    59 | 62 => 0x00040000, // Control
-                    58 | 61 => 0x00080000, // Option
-                    55 | 54 => 0x00100000, // Command
-                    57 => 0x00010000,      // Caps Lock
-                    _ => 0,
-                };
-                (flags.bits() & mask) != 0
+            let is_down = if matches!(etype, CGEventType::FlagsChanged) {
+                 // For FlagsChanged, we need to check the flags bitmask
+                 let flags = event.get_flags();
+                 let is_mod = match key_code {
+                     54 | 55 => flags.contains(core_graphics::event::CGEventFlags::CGEventFlagCommand),
+                     56 | 60 => flags.contains(core_graphics::event::CGEventFlags::CGEventFlagShift),
+                     57 => flags.contains(core_graphics::event::CGEventFlags::CGEventFlagAlphaShift),
+                     58 | 61 => flags.contains(core_graphics::event::CGEventFlags::CGEventFlagAlternate),
+                     59 | 62 => flags.contains(core_graphics::event::CGEventFlags::CGEventFlagControl),
+                     _ => false,
+                 };
+                 is_mod
             } else {
-                etype == CGEventType::KeyDown
+                 matches!(etype, CGEventType::KeyDown)
             };
 
             let win_vk = crate::keymap::macos_to_windows_vk(key_code as u32);
@@ -142,10 +167,6 @@ impl InputSource for MacosInputSource {
                 move |_proxy, etype, event| {
                     match etype {
                         CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
-                            // Re-enable if disabled? For now just log or ignore.
-                            // In a real app we should re-enable the tap.
-                            let tap_ptr = _proxy as *mut core_graphics::sys::CGEventTapProxy; // Incorrect but we don't have the tap ref here easily
-                            // CGEventTapEnable(tap, true); 
                             None
                         }
                         _ => {
@@ -158,18 +179,7 @@ impl InputSource for MacosInputSource {
                             let is_remote = IS_REMOTE.load(Ordering::SeqCst);
                             
                             if is_remote {
-                                // IMPORTANT: When remote, we must swallow LOCAL events entirely 
-                                // to prevent "Ghost inputs" on the macOS side.
-                                // Returning None captures the event and stops propagation.
-                                
-                                // Exception: Allow the specific edge-triggering MouseMove to pass? 
-                                // No, capturing it is safer to stop the cursor exactly at the edge.
-                                // However, if we capture ALL MouseMoves, the user might feel "stuck".
-                                // But since we are "Remote", the cursor SHOULD be stuck or hidden.
-                                
-                                // Exception 2: FlagsChanged might need to be local for OS awareness?
-                                // Usually no, we want full redirection.
-                                
+                                // Swallow event locally
                                 None
                             } else {
                                 // Local mode: Pass event through to OS

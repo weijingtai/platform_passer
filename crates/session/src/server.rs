@@ -146,7 +146,24 @@ async fn handle_connection(
                             break;
                         }
                         Err(e) => {
-                            let _ = log_error!(&event_tx_loop, "Protocol stream error: {}", e);
+                            // Check if it's a disconnection-related error
+                            let is_disconnect = if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+                                matches!(
+                                    io_err.kind(),
+                                    std::io::ErrorKind::UnexpectedEof | 
+                                    std::io::ErrorKind::ConnectionReset | 
+                                    std::io::ErrorKind::BrokenPipe |
+                                    std::io::ErrorKind::TimedOut
+                                )
+                            } else {
+                                false
+                            };
+
+                            if is_disconnect {
+                                let _ = log_info!(&event_tx_loop, "Client disconnected (Stream closed).");
+                            } else {
+                                let _ = log_error!(&event_tx_loop, "Protocol stream error: {}", e);
+                            }
                             break;
                         }
                     }

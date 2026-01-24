@@ -229,7 +229,24 @@ async fn read_frame_loop(
                  return;
              },
              Err(e) => {
-                 log_error!(&event_tx, "Inbound protocol stream error: {}", e);
+                 // Check if it's a disconnection-related error
+                 let is_disconnect = if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+                     matches!(
+                         io_err.kind(),
+                         std::io::ErrorKind::UnexpectedEof | 
+                         std::io::ErrorKind::ConnectionReset | 
+                         std::io::ErrorKind::BrokenPipe |
+                         std::io::ErrorKind::TimedOut
+                     )
+                 } else {
+                     false
+                 };
+
+                 if is_disconnect {
+                     log_info!(&event_tx, "Server disconnected (Stream closed).");
+                 } else {
+                     log_error!(&event_tx, "Inbound protocol stream error: {}", e);
+                 }
                  return;
              },
          }
