@@ -7,14 +7,15 @@ use windows::Win32::Foundation::{LPARAM, WPARAM, LRESULT};
 use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowsHookExA, UnhookWindowsHookEx, CallNextHookEx, GetMessageA,
     WH_KEYBOARD_LL, WH_MOUSE_LL, HHOOK, KBDLLHOOKSTRUCT, MSLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
-    WM_MOUSEMOVE,
+    WM_MOUSEMOVE, GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    GetCursorPos, SetCursorPos,
 };
+use tracing;
 use std::thread;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static IS_REMOTE: AtomicBool = AtomicBool::new(false);
-static VIRTUAL_CURSOR: Mutex<(f32, f32)> = Mutex::new((0.0, 0.0));
 
 // Global callback storage
 type HookCallback = Box<dyn Fn(InputEvent) + Send + Sync>;
@@ -28,10 +29,6 @@ pub struct WindowsInputSource;
 impl WindowsInputSource {
     pub fn new() -> Self {
         Self
-    }
-
-    pub fn set_remote(remote: bool) {
-        IS_REMOTE.store(remote, Ordering::SeqCst);
     }
 }
 
@@ -67,6 +64,37 @@ impl InputSource for WindowsInputSource {
             }
             if MOUSE_HOOK.0 != 0 {
                 UnhookWindowsHookEx(MOUSE_HOOK);
+            }
+        }
+        Ok(())
+    }
+
+    fn set_remote(&self, remote: bool) -> Result<()> {
+        IS_REMOTE.store(remote, Ordering::SeqCst);
+        
+        if !remote {
+            // Warp cursor 50 pixels inwards if at edge to prevent immediate re-trigger
+            unsafe {
+                let mut pt = windows::Win32::Foundation::POINT::default();
+                if GetCursorPos(&mut pt).is_ok() {
+                    let v_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                    let v_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                    let v_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                    let v_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+                    let mut new_x = pt.x;
+                    let mut new_y = pt.y;
+
+                    // Check which edge we are at and move 50px inwards
+                    if pt.x <= v_left + 1 { new_x += 50; }
+                    if pt.x >= v_left + v_width - 1 { new_x -= 50; }
+                    if pt.y <= v_top + 1 { new_y += 50; }
+                    if pt.y >= v_top + v_height - 1 { new_y -= 50; }
+
+                    if new_x != pt.x || new_y != pt.y {
+                        let _ = SetCursorPos(new_x, new_y);
+                    }
+                }
             }
         }
         Ok(())
@@ -115,11 +143,14 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
         let mut is_remote = IS_REMOTE.load(Ordering::SeqCst);
         let mut swallow = is_remote;
         
-        let screen_width = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN);
-        let screen_height = windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN);
+        let v_left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) } as f32;
+        let v_top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) } as f32;
+        let v_width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) } as f32;
+        let v_height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) } as f32;
         
-        let abs_x = ms.pt.x as f32 / screen_width as f32;
-        let abs_y = ms.pt.y as f32 / screen_height as f32;
+        // Normalize coordinates relative to virtual desktop
+        let abs_x = (ms.pt.x as f32 - v_left) / v_width;
+        let abs_y = (ms.pt.y as f32 - v_top) / v_height;
 
         let mut event = None;
         let msg = wparam.0 as u32;

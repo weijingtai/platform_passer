@@ -2,7 +2,7 @@ use crate::events::SessionEvent;
 use crate::commands::SessionCommand;
 use crate::{log_info, log_error, log_debug, log_warn};
 use anyhow::Result;
-use platform_passer_core::{Frame, ClipboardEvent, Handshake, Heartbeat};
+use platform_passer_core::{Frame, ClipboardEvent, Handshake, Heartbeat, InputEvent, ScreenSide};
 use platform_passer_transport::{connect_ws};
 use platform_passer_input::{InputSink, DefaultInputSink, InputSource, DefaultInputSource};
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
@@ -161,6 +161,8 @@ pub async fn run_client_session(
                                                 Frame::Input(event) => {
                                                     if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
                                                         log_info!(&event_tx, "Focus switched to {:?}", side);
+                                                        // CRITICAL: The client being controlled should NOT swallow its own input.
+                                                        // Only the controller machine should call set_remote(true).
                                                     } else {
                                                         let _ = sink.inject_event(event);
                                                     }
@@ -215,6 +217,7 @@ pub async fn run_client_session(
                     }
                     
                     // Clean up before retry
+                    let _ = source.set_remote(false); // Ensure local input capture is re-enabled
                     let _ = hb_stop_tx.send(()).await;
                 }
                 

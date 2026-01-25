@@ -37,7 +37,7 @@ impl MacosInputSource {
         }
     }
 
-    pub fn set_remote(remote: bool) {
+    pub fn set_remote_impl(remote: bool) {
         println!("InputSource: [DEBUG] set_remote({}) called", remote);
         let old = IS_REMOTE.swap(remote, Ordering::SeqCst);
         
@@ -200,7 +200,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
 
                 // CRITICAL: Call set_remote(false) FIRST to re-associate.
                 // THEN warp. If we warp while disassociated, the re-association might snap back to the "Center Lock" hardware position.
-                MacosInputSource::set_remote(false);
+                MacosInputSource::set_remote_impl(false);
                 
                 unsafe {
                     let _ = CGWarpMouseCursorPosition(edge_pos);
@@ -259,7 +259,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             // Check for hotkey to return to local (e.g., Command + Escape)
             // Allow this even if remote (it's the escape hatch)
             if is_remote && key_code == 53 { // Escape
-                 MacosInputSource::set_remote(false);
+                 MacosInputSource::set_remote_impl(false);
                  show_notification("Returned to Local Control (Escape)");
                  tracing::info!("InputSource: Returned to Local Control (Escape)");
                  return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
@@ -485,6 +485,11 @@ impl InputSource for MacosInputSource {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn set_remote(&self, remote: bool) -> Result<()> {
+        Self::set_remote_impl(remote);
         Ok(())
     }
 }

@@ -36,13 +36,14 @@ pub async fn run_server_session(bind_addr: SocketAddr, event_tx: Sender<SessionE
         let event_tx_clone = event_tx.clone();
         let input_rx = input_tx.subscribe();
         
+        let source_clone = source.clone();
         tokio::spawn(async move {
             match accept_async(stream).await {
                 Ok(ws_stream) => {
                     log_info!(&event_tx_clone, "WebSocket handshake successful with {}", addr);
                     let _ = event_tx_clone.send(SessionEvent::Connected(addr.to_string())).await;
                     
-                    if let Err(e) = handle_protocol_session(ws_stream, input_rx, event_tx_clone.clone()).await {
+                    if let Err(e) = handle_protocol_session(ws_stream, input_rx, event_tx_clone.clone(), source_clone).await {
                         log_error!(&event_tx_clone, "Protocol error with {}: {}", addr, e);
                     }
                 }
@@ -59,7 +60,8 @@ pub async fn run_server_session(bind_addr: SocketAddr, event_tx: Sender<SessionE
 async fn handle_protocol_session(
     ws_stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     mut input_rx: tokio::sync::broadcast::Receiver<InputEvent>,
-    event_tx: Sender<SessionEvent>
+    event_tx: Sender<SessionEvent>,
+    source: Arc<dyn InputSource>,
 ) -> Result<()> {
     let (mut ws_sink, mut ws_stream) = ws_stream.split();
     let clip = DefaultClipboard::new();
@@ -188,7 +190,7 @@ async fn handle_protocol_session(
     }
 
     log_info!(&event_tx, "Session terminated. Resetting focus.");
-    DefaultInputSource::set_remote(false);
+    let _ = source.set_remote(false);
     let _ = event_tx.send(SessionEvent::Disconnected).await;
     Ok(())
 }
