@@ -11,23 +11,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{self, Sender, Receiver};
 use std::time::Duration;
+use crate::clipboard_utils::{LocalClipboardContent, calculate_hash};
 use tokio_tungstenite::tungstenite::Message;
 use futures_util::{StreamExt, SinkExt};
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
 
-// Helper to track last content for loop protection
-#[derive(Debug, Clone, PartialEq)]
-enum LocalClipboardContent {
-    Text(String),
-    Image(u64), // Hash of the image data
-}
-
-fn calculate_hash<T: Hash>(t: &T) -> u64 {
-    let mut s = DefaultHasher::new();
-    t.hash(&mut s);
-    s.finish()
-}
 
 pub async fn run_client_session(
     server_addr: SocketAddr, 

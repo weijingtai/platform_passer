@@ -79,6 +79,10 @@ This document outlines the tasks for the macOS developer to ensure parity with t
 ### 9. Advanced Clipboard
 - [x] **Image Support**: 
     - [x] `NSPasteboard` read/write PNG.
+- [/] **Clipboard Synchronization (Bidirectional)**:
+    - [ ] **Server-Side Listener**: Implement a background listener in `server.rs` to detect local clipboard changes and broadcast to clients.
+    - [ ] **Loop Protection**: Implement robust deduplication to avoid "echoing" clipboard content between devices.
+    - [ ] **Unified Frame Channel**: Refactor server outbound channel to support both Input and Clipboard events.
 
 
 ## 🤝 Synchronization Points

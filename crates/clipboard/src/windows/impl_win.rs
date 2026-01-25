@@ -130,6 +130,7 @@ impl ClipboardProvider for WindowsClipboard {
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND(0), 0, 0).into() {
+                // println!("[Clipboard] Received message: {:?}", msg.message);
                 let _ = DispatchMessageW(&msg);
             }
             
@@ -145,8 +146,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_CLIPBOARDUPDATE => {
             if IGNORE_EVENTS.load(Ordering::SeqCst) > 0 {
                 IGNORE_EVENTS.fetch_sub(1, Ordering::SeqCst);
+                // println!("[Clipboard] Ignored clipboard event (internal update)");
                 return LRESULT(0);
             }
+            // println!("[Clipboard] Detected clipboard change");
             if let Ok(guard) = GLOBAL_CALLBACK.lock() {
                 if let Some(cb) = &*guard {
                     cb();

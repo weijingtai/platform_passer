@@ -7,8 +7,9 @@ use platform_passer_input::{InputSource, DefaultInputSource};
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
 use std::net::SocketAddr;
 use tokio::sync::mpsc::Sender;
-use std::sync::Arc;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
+use std::sync::{Arc, Mutex};
+use crate::clipboard_utils::{LocalClipboardContent, calculate_hash};
 use futures_util::{StreamExt, SinkExt};
 use std::collections::HashMap;
 use tokio::fs::File;
@@ -17,14 +18,63 @@ use tokio::io::AsyncWriteExt;
 pub async fn run_server_session(bind_addr: SocketAddr, event_tx: Sender<SessionEvent>) -> Result<()> {
     log_info!(&event_tx, "Starting WebSocket server session on {}", bind_addr);
     
-    // 1. Setup Input Source (Server captures local input)
+    // 1. Setup Shared Outbound channel for all events (Input, Clipboard)
+    let (broadcast_tx, _broadcast_rx) = tokio::sync::broadcast::channel::<Frame>(100);
+    
+    // 2. Setup Input Source (Server captures local input)
     let source = Arc::new(DefaultInputSource::new());
-    let (input_tx, _input_rx) = tokio::sync::broadcast::channel::<InputEvent>(100);
-    let input_tx_captured = input_tx.clone();
+    let broadcast_tx_captured = broadcast_tx.clone();
     
     source.start_capture(Box::new(move |event| {
-        let _ = input_tx_captured.send(event);
+        let _ = broadcast_tx_captured.send(Frame::Input(event));
     }))?;
+
+    // 3. Setup Clipboard Listener
+    let clip_tx = broadcast_tx.clone();
+    let clip_log = event_tx.clone();
+    let clipboard = DefaultClipboard::new();
+    
+    // Loop Protection: Store last received content hash/string to avoid echo
+    let last_remote_clip = Arc::new(Mutex::new(None::<LocalClipboardContent>));
+    let last_remote_clip_listener = last_remote_clip.clone();
+
+    if let Err(e) = clipboard.start_listener(Box::new(move || {
+        let clip = DefaultClipboard::new();
+        
+        // Priority 1: Text
+        if let Ok(text) = clip.get_text() {
+            if !text.is_empty() {
+                let should_send = if let Ok(lock) = last_remote_clip_listener.lock() {
+                    match &*lock {
+                        Some(LocalClipboardContent::Text(last)) => *last != text,
+                        _ => true,
+                    }
+                } else { true };
+
+                if should_send {
+                     let _ = clip_tx.send(Frame::Clipboard(ClipboardEvent::Text(text)));
+                }
+                return;
+            }
+        }
+        
+        // Priority 2: Image
+        if let Ok(Some(img_data)) = clip.get_image() {
+            let img_hash = calculate_hash(&img_data);
+             let should_send = if let Ok(lock) = last_remote_clip_listener.lock() {
+                match &*lock {
+                    Some(LocalClipboardContent::Image(last_hash)) => *last_hash != img_hash,
+                    _ => true,
+                }
+            } else { true };
+            
+            if should_send {
+                 let _ = clip_tx.send(Frame::Clipboard(ClipboardEvent::Image { data: img_data }));
+            }
+        }
+    })) {
+        log_error!(&clip_log, "Failed to start clipboard listener: {}", e);
+    }
     
     // 2. Setup WebSocket Listener
     let listener = make_ws_listener(bind_addr).await?;
@@ -34,7 +84,8 @@ pub async fn run_server_session(bind_addr: SocketAddr, event_tx: Sender<SessionE
     while let Ok((stream, addr)) = listener.accept().await {
         log_debug!(&event_tx, "New incoming TCP connection from {}", addr);
         let event_tx_clone = event_tx.clone();
-        let input_rx = input_tx.subscribe();
+        let broadcast_rx = broadcast_tx.subscribe();
+        let last_remote_clip_conn = last_remote_clip.clone();
         
         let source_clone = source.clone();
         tokio::spawn(async move {
@@ -43,7 +94,7 @@ pub async fn run_server_session(bind_addr: SocketAddr, event_tx: Sender<SessionE
                     log_info!(&event_tx_clone, "WebSocket handshake successful with {}", addr);
                     let _ = event_tx_clone.send(SessionEvent::Connected(addr.to_string())).await;
                     
-                    if let Err(e) = handle_protocol_session(ws_stream, input_rx, event_tx_clone.clone(), source_clone).await {
+                    if let Err(e) = handle_protocol_session(ws_stream, broadcast_rx, event_tx_clone.clone(), source_clone, last_remote_clip_conn).await {
                         log_error!(&event_tx_clone, "Protocol error with {}: {}", addr, e);
                     }
                 }
@@ -59,9 +110,10 @@ pub async fn run_server_session(bind_addr: SocketAddr, event_tx: Sender<SessionE
 
 async fn handle_protocol_session(
     ws_stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    mut input_rx: tokio::sync::broadcast::Receiver<InputEvent>,
+    mut broadcast_rx: tokio::sync::broadcast::Receiver<Frame>,
     event_tx: Sender<SessionEvent>,
     source: Arc<dyn InputSource>,
+    last_remote_clip: Arc<Mutex<Option<LocalClipboardContent>>>,
 ) -> Result<()> {
     let (mut ws_sink, mut ws_stream) = ws_stream.split();
     let clip = DefaultClipboard::new();
@@ -103,7 +155,18 @@ async fn handle_protocol_session(
                                 match frame {
                                     Frame::Clipboard(ClipboardEvent::Text(text)) => {
                                         log_debug!(&event_tx, "Received clipboard update ({} chars)", text.len());
+                                        if let Ok(mut lock) = last_remote_clip.lock() {
+                                            *lock = Some(LocalClipboardContent::Text(text.clone()));
+                                        }
                                         let _ = clip.set_text(text);
+                                    }
+                                    Frame::Clipboard(ClipboardEvent::Image { data }) => {
+                                        log_debug!(&event_tx, "Received clipboard image ({} bytes)", data.len());
+                                        let hash = calculate_hash(&data);
+                                        if let Ok(mut lock) = last_remote_clip.lock() {
+                                            *lock = Some(LocalClipboardContent::Image(hash));
+                                        }
+                                        let _ = clip.set_image(data);
                                     }
                                     Frame::Heartbeat(hb) => {
                                         let _ = ws_sink.send(Message::Binary(bincode::serialize(&Frame::Heartbeat(hb))?)).await;
@@ -163,25 +226,25 @@ async fn handle_protocol_session(
                     _ => {}
                 }
             }
-            // Send inputs to client
-            result = input_rx.recv() => {
+            // Send events to client
+            result = broadcast_rx.recv() => {
                 match result {
-                    Ok(event) => {
-                        if matches!(event, InputEvent::ScreenSwitch(_)) {
-                            log_info!(&event_tx, "Switching focus: {:?}", event);
+                    Ok(frame) => {
+                        if let Frame::Input(InputEvent::ScreenSwitch(_)) = &frame {
+                            log_info!(&event_tx, "Switching focus: {:?}", frame);
                         }
-                        let bytes = bincode::serialize(&Frame::Input(event))?;
+                        let bytes = bincode::serialize(&frame)?;
                         if let Err(e) = ws_sink.send(Message::Binary(bytes)).await {
-                            log_error!(&event_tx, "Failed to send input: {}", e);
+                            log_error!(&event_tx, "Failed to send frame: {}", e);
                             break;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        log_warn!(&event_tx, "Input broadcast LAGGED by {} messages. Skipping frames.", n);
+                        log_warn!(&event_tx, "Broadcast LAGGED by {} messages. Skipping frames.", n);
                         continue;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        log_error!(&event_tx, "Input broadcast channel closed.");
+                        log_error!(&event_tx, "Broadcast channel closed.");
                         break;
                     }
                 }

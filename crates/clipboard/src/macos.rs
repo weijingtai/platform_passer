@@ -76,6 +76,7 @@ impl ClipboardProvider for MacosClipboard {
                     
                     if change_count != last_count {
                         last_count = change_count;
+                        // println!("[Clipboard] Detected macOS clipboard change (count: {})", change_count);
                         callback();
                     }
                 }

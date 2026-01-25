@@ -14,6 +14,14 @@ This document tracks the progress of the macOS platform support for the `platfor
 
 ## Synchronization Log
 
+### [2026-01-24] Bidirectional Clipboard Synchronization
+- **Server Clipboard Monitoring**:
+    - Identified that `server.rs` lacked a clipboard listener, preventing macOS (as server) from sending its clipboard to Windows (as client).
+    - Planned refactor of the server's outbound channel to broadcast `Frame` instead of just `InputEvent`.
+    - Implementing loop protection using `last_remote_clip` to prevent synchronization loops.
+- **Protocol Refinement**:
+    - Moving towards a unified event distribution system where all local events (input, clipboard) are wrapped in `Frame` before being broadcasted to connected sessions.
+
 ### [2026-01-23] Core Stability: Focus Protection & Permission UX
 - **Advanced Focus Protection (Anti-Leakage)**:
     - **Landing Zone Cooling**: Implemented a 300ms "protected period" upon returning to Local mode. During this time, mouse moves are permitted for positioning, but all other inputs (clicks, keys) are swallowed to prevent accidental focus-grabbing in macOS.

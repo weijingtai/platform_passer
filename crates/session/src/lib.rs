@@ -1,6 +1,7 @@
 pub mod events;
 pub mod commands;
 pub mod logging;
+pub mod clipboard_utils;
 pub mod client;
 pub mod server;
 
