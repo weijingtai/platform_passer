@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::{command, WebviewWindow, State, Emitter};
+use tauri::{command, WebviewWindow, State, Emitter, Manager};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
+use tauri_plugin_notification::NotificationExt;
 use platform_passer_session::{run_client_session, run_server_session, SessionEvent, SessionCommand};
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
@@ -108,6 +111,8 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
 
     let running_clone = state.running.clone();
     let log_tx_clone = state.log_tx.clone();
+    let config_clone = state.config.clone();
+    let app_handle = window.app_handle().clone();
     
     // Spawn async task
     tauri::async_runtime::spawn(async move {
@@ -126,12 +131,32 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
         while let Some(event) = rx.recv().await {
             let (event_type, message) = match event {
                 SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
-                SessionEvent::Connected(s) => ("Connected".to_string(), format!("Connected to {}", s)),
-                SessionEvent::Disconnected => ("Disconnected".to_string(), "Disconnected".to_string()),
-                SessionEvent::Error(s) => ("Error".to_string(), format!("Error: {}", s)),
+                SessionEvent::Connected(ref s) => {
+                    let enabled = config_clone.lock().unwrap().notifications_enabled;
+                    if enabled {
+                         let _ = app_handle.notification().builder()
+                            .title("Platform Passer")
+                            .body(format!("Connected to {}", s))
+                            .show();
+                    }
+                    ("Connected".to_string(), format!("Connected to {}", s))
+                },
+                SessionEvent::Disconnected => {
+                    let enabled = config_clone.lock().unwrap().notifications_enabled;
+                    if enabled {
+                         let _ = app_handle.notification().builder()
+                            .title("Platform Passer")
+                            .body("Disconnected")
+                            .show();
+                    }
+                    ("Disconnected".to_string(), "Disconnected".to_string())
+                },
+                SessionEvent::Error(ref s) => ("Error".to_string(), format!("Error: {}", s)),
             };
 
-            let _ = window.emit("session-event", Payload { event_type, message });
+            if let Err(e) = window.emit("session-event", Payload { event_type, message }) {
+                tracing::error!("Failed to emit session-event to GUI: {}", e);
+            }
         }
         
         *running_clone.lock().unwrap() = false;
@@ -156,6 +181,8 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
     let running_clone = state.running.clone();
     let tx_clone = state.command_tx.clone();
     let log_tx_clone = state.log_tx.clone();
+    let config_clone = state.config.clone();
+    let app_handle = window.app_handle().clone();
 
     let ip_clone = ip.clone();
     tauri::async_runtime::spawn(async move {
@@ -176,12 +203,32 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
         while let Some(event) = rx.recv().await {
             let (event_type, message) = match event {
                 SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
-                SessionEvent::Connected(s) => ("Connected".to_string(), format!("Connected to {}", s)),
-                SessionEvent::Disconnected => ("Disconnected".to_string(), "Disconnected".to_string()),
-                SessionEvent::Error(s) => ("Error".to_string(), format!("Error: {}", s)),
+                SessionEvent::Connected(ref s) => {
+                    let enabled = config_clone.lock().unwrap().notifications_enabled;
+                    if enabled {
+                         let _ = app_handle.notification().builder()
+                            .title("Platform Passer")
+                            .body(format!("Connected to {}", s))
+                            .show();
+                    }
+                    ("Connected".to_string(), format!("Connected to {}", s))
+                },
+                SessionEvent::Disconnected => {
+                     let enabled = config_clone.lock().unwrap().notifications_enabled;
+                    if enabled {
+                         let _ = app_handle.notification().builder()
+                            .title("Platform Passer")
+                            .body("Disconnected")
+                            .show();
+                    }
+                    ("Disconnected".to_string(), "Disconnected".to_string())
+                },
+                SessionEvent::Error(ref s) => ("Error".to_string(), format!("Error: {}", s)),
             };
 
-            let _ = window.emit("session-event", Payload { event_type, message });
+            if let Err(e) = window.emit("session-event", Payload { event_type, message }) {
+                tracing::error!("Failed to emit session-event to GUI: {}", e);
+            }
         }
         *running_clone.lock().unwrap() = false;
         *tx_clone.lock().unwrap() = None;
@@ -257,6 +304,49 @@ fn main() {
             config: Arc::new(Mutex::new(load_config().unwrap_or_default())),
         })
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            // Tray setup
+            let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            
+            let _tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .on_menu_event(|app, event| {
+                    match event.id.as_ref() {
+                        "quit" => {
+                            std::process::exit(0);
+                        }
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                         let app = tray.app_handle();
+                         if let Some(window) = app.get_webview_window("main") {
+                             let _ = window.show();
+                             let _ = window.set_focus();
+                         }
+                    }
+                })
+                .build(app)?;
+            
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                window.hide().unwrap();
+                api.prevent_close();
+            }
+        })
         .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action, check_accessibility, get_config, save_config])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

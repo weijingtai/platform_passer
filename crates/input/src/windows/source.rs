@@ -16,6 +16,7 @@ use std::thread;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static IS_REMOTE: AtomicBool = AtomicBool::new(false);
+static VIRTUAL_CURSOR_POS: Mutex<Option<(f32, f32)>> = Mutex::new(None);
 
 // Global callback storage
 type HookCallback = Box<dyn Fn(InputEvent) + Send + Sync>;
@@ -72,16 +73,33 @@ impl InputSource for WindowsInputSource {
     fn set_remote(&self, remote: bool) -> Result<()> {
         IS_REMOTE.store(remote, Ordering::SeqCst);
         
-        if !remote {
-            // Warp cursor 50 pixels inwards if at edge to prevent immediate re-trigger
-            unsafe {
+        unsafe {
+            let v_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            let v_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+            let v_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            let v_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+            if remote {
+                 // Initialize virtual cursor to current position
                 let mut pt = windows::Win32::Foundation::POINT::default();
                 if GetCursorPos(&mut pt).is_ok() {
-                    let v_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-                    let v_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-                    let v_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-                    let v_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                    let abs_x = (pt.x - v_left) as f32 / v_width as f32;
+                    let abs_y = (pt.y - v_top) as f32 / v_height as f32;
+                    *VIRTUAL_CURSOR_POS.lock().unwrap() = Some((abs_x, abs_y));
+                    
+                    // Center the cursor to start relative tracking
+                    let center_x = v_left + v_width / 2;
+                    let center_y = v_top + v_height / 2;
+                    let _ = SetCursorPos(center_x, center_y);
+                }
+            } else {
+                // Return from remote
+                // Reset virtual cursor
+                *VIRTUAL_CURSOR_POS.lock().unwrap() = None;
 
+                // Warp cursor inwards
+                let mut pt = windows::Win32::Foundation::POINT::default();
+                if GetCursorPos(&mut pt).is_ok() {
                     let mut new_x = pt.x;
                     let mut new_y = pt.y;
 
@@ -140,80 +158,111 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         let ms = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+        // Important: check if this event was injected by us (SetCursorPos)
+        // LLMHF_INJECTED (bit 0) or LLMHF_LOWER_IL_INJECTED (bit 1)
+        let injected = (ms.flags & 0x01) != 0 || (ms.flags & 0x02) != 0;
+
         let mut is_remote = IS_REMOTE.load(Ordering::SeqCst);
         let mut swallow = is_remote;
         
-        let v_left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) } as f32;
-        let v_top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) } as f32;
-        let v_width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) } as f32;
-        let v_height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) } as f32;
+        let v_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let v_top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let v_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let v_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
         
-        // Normalize coordinates relative to virtual desktop
-        let abs_x = (ms.pt.x as f32 - v_left) / v_width;
-        let abs_y = (ms.pt.y as f32 - v_top) / v_height;
+        // Normalize physical coordinates for local logic
+        let abs_x = (ms.pt.x - v_left) as f32 / v_width as f32;
+        let abs_y = (ms.pt.y - v_top) as f32 / v_height as f32;
 
         let mut event = None;
         let msg = wparam.0 as u32;
 
-        match msg {
-            WM_MOUSEMOVE => {
-                // Dynamic Edge Detection
-                if !is_remote {
-                    let mut trigger_remote = false;
-                    if let Ok(config_opt) = GLOBAL_CONFIG.lock() {
-                       if let Some(config) = &*config_opt {
-                           for remote in &config.topology.remotes {
-                               match remote.position {
-                                   ScreenPosition::Right => if abs_x >= 0.999 { trigger_remote = true; },
-                                   ScreenPosition::Left => if abs_x <= 0.001 { trigger_remote = true; },
-                                   ScreenPosition::Top => if abs_y <= 0.001 { trigger_remote = true; },
-                                   ScreenPosition::Bottom => if abs_y >= 0.999 { trigger_remote = true; },
-                               }
+        if is_remote {
+            // REMOTE MODE: Center Locking Logic
+            if msg == WM_MOUSEMOVE {
+                if !injected {
+                    let center_x = v_left + v_width / 2;
+                    let center_y = v_top + v_height / 2;
+
+                    let dx = ms.pt.x - center_x;
+                    let dy = ms.pt.y - center_y;
+
+                    // Only process if moved from center
+                    if dx != 0 || dy != 0 {
+                        let mut guard = VIRTUAL_CURSOR_POS.lock().unwrap();
+                        if let Some((vx, vy)) = *guard {
+                            let mut new_vx = vx + (dx as f32 / v_width as f32);
+                            let mut new_vy = vy + (dy as f32 / v_height as f32);
+
+                            // Clamp
+                            new_vx = new_vx.max(0.0).min(1.0);
+                            new_vy = new_vy.max(0.0).min(1.0);
+                            
+                            *guard = Some((new_vx, new_vy));
+                            
+                            // Send Absolute Virtual Position
+                            event = Some(InputEvent::MouseMove { x: new_vx, y: new_vy });
+                            
+                            // Re-center physical cursor
+                            let _ = SetCursorPos(center_x, center_y);
+                        }
+                    }
+                }
+            } else {
+                 event = match msg {
+                    WM_LBUTTONDOWN | WM_LBUTTONUP => Some(InputEvent::MouseButton { button: platform_passer_core::MouseButton::Left, is_down: msg == WM_LBUTTONDOWN }),
+                    WM_RBUTTONDOWN | WM_RBUTTONUP => Some(InputEvent::MouseButton { button: platform_passer_core::MouseButton::Right, is_down: msg == WM_RBUTTONDOWN }),
+                    WM_MBUTTONDOWN | WM_MBUTTONUP => Some(InputEvent::MouseButton { button: platform_passer_core::MouseButton::Middle, is_down: msg == WM_MBUTTONDOWN }),
+                    0x020A => { // WM_MOUSEWHEEL
+                        let delta = (ms.mouseData >> 16) as i16 as f32 / 120.0;
+                         Some(InputEvent::Scroll { dx: 0.0, dy: delta })
+                    },
+                    0x020E => { // WM_MOUSEHWHEEL
+                        let delta = (ms.mouseData >> 16) as i16 as f32 / 120.0;
+                        Some(InputEvent::Scroll { dx: delta, dy: 0.0 })
+                    },
+                     _ => None
+                };
+            }
+        } else {
+            // LOCAL MODE: Edge Detection
+             if msg == WM_MOUSEMOVE {
+                let mut trigger_remote = false;
+                if let Ok(config_opt) = GLOBAL_CONFIG.lock() {
+                   if let Some(config) = &*config_opt {
+                       for remote in &config.topology.remotes {
+                           match remote.position {
+                               ScreenPosition::Right => if abs_x >= 0.999 { trigger_remote = true; },
+                               ScreenPosition::Left => if abs_x <= 0.001 { trigger_remote = true; },
+                               ScreenPosition::Top => if abs_y <= 0.001 { trigger_remote = true; },
+                               ScreenPosition::Bottom => if abs_y >= 0.999 { trigger_remote = true; },
                            }
                        }
-                    }
-                    // Fallback default
-                    if GLOBAL_CONFIG.lock().unwrap().is_none() && abs_x >= 0.998 {
-                        trigger_remote = true;
-                    }
+                   }
+                }
+                // Fallback default
+                if GLOBAL_CONFIG.lock().unwrap().is_none() && abs_x >= 0.998 {
+                    trigger_remote = true;
+                }
 
-                    if trigger_remote {
-                        IS_REMOTE.store(true, Ordering::SeqCst);
-                        is_remote = true;
-                        swallow = true;
-                        tracing::info!("InputSource: Switched to Remote");
-                        event = Some(InputEvent::ScreenSwitch(ScreenSide::Remote));
-                    }
-                }
-                
-                if is_remote {
-                    event = Some(InputEvent::MouseMove { x: abs_x, y: abs_y });
-                }
-            }
-            WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP => {
-                if is_remote {
-                    let button = match msg {
-                        WM_LBUTTONDOWN | WM_LBUTTONUP => platform_passer_core::MouseButton::Left,
-                        WM_RBUTTONDOWN | WM_RBUTTONUP => platform_passer_core::MouseButton::Right,
-                        _ => platform_passer_core::MouseButton::Middle,
-                    };
-                    let is_down = msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN;
-                    event = Some(InputEvent::MouseButton { button, is_down });
+                if trigger_remote {
+                    // Switch to Remote
+                    IS_REMOTE.store(true, Ordering::SeqCst);
+                    is_remote = true;
+                    swallow = true;
+                    
+                    // Initialize Virtual Cursor
+                    *VIRTUAL_CURSOR_POS.lock().unwrap() = Some((abs_x, abs_y));
+                    
+                    // Center Lock immediately
+                    let center_x = v_left + v_width / 2;
+                    let center_y = v_top + v_height / 2;
+                    let _ = SetCursorPos(center_x, center_y);
+
+                    tracing::info!("InputSource: Switched to Remote");
+                    event = Some(InputEvent::ScreenSwitch(ScreenSide::Remote));
                 }
             }
-            0x020A => { // WM_MOUSEWHEEL
-                if is_remote {
-                    let delta = (ms.mouseData >> 16) as i16 as f32 / 120.0;
-                    event = Some(InputEvent::Scroll { dx: 0.0, dy: delta });
-                }
-            }
-            0x020E => { // WM_MOUSEHWHEEL
-                if is_remote {
-                    let delta = (ms.mouseData >> 16) as i16 as f32 / 120.0;
-                    event = Some(InputEvent::Scroll { dx: delta, dy: 0.0 });
-                }
-            }
-            _ => {}
         }
 
         if let Some(ev) = event {
