@@ -15,4 +15,5 @@ pub trait InputSink {
     /// Inject a remote input event into the local system.
     fn inject_event(&self, event: InputEvent) -> Result<()>;
     fn update_config(&self, _config: AppConfig) -> Result<()> { Ok(()) }
+    fn reset_input(&self) -> Result<()> { Ok(()) }
 }

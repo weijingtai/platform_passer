@@ -32,7 +32,7 @@
       <div style="display: flex; gap: 0.5rem;">
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 2;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Server IP</label>
-          <input type="text" id="server-ip" placeholder="Target IP" value="127.0.0.1" />
+          <input type="text" id="server-ip" placeholder="Target IP" value="127.0.0.1" onchange="saveLastIp(this.value)" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Port</label>
@@ -171,6 +171,10 @@
       const activeTab = document.querySelector(`.tab[onclick*="switchTab('${tab}')"]`);
       if (activeTab) activeTab.classList.add('active');
 
+      // Persist last tab
+      currentConfig.last_mode = tab;
+      saveCurrentConfig();
+
       const clientView = document.getElementById('client-view');
       const serverView = document.getElementById('server-view');
       const settingsView = document.getElementById('settings-view');
@@ -299,6 +303,11 @@
       }
     }
 
+    async function saveLastIp(ip) {
+      currentConfig.last_server_ip = ip;
+      saveCurrentConfig();
+    }
+
     async function loadConfig() {
       if (!invoke) return;
       try {
@@ -311,6 +320,11 @@
         document.getElementById('sync-clipboard').checked = config.clipboard.sync_enabled;
         document.getElementById('sync-images').checked = config.clipboard.sync_images;
 
+        // Apply persisted IP
+        document.getElementById('server-ip').value = config.last_server_ip;
+
+        // Apply persisted tab if we are not already in a specific tab
+        // But we usually want to do this only once on startup.
         renderTopology(config.topology);
       } catch (e) {
         log(`Config Load Error: ${e}`);
@@ -377,8 +391,13 @@
 
     window.addEventListener('DOMContentLoaded', () => {
       // Small delay to ensure Tauri global is ready
-      setTimeout(() => {
-        switchTab('client');
+      setTimeout(async () => {
+        // Load config first to get last used mode and IP
+        await loadConfig();
+        
+        // Default to last used mode
+        switchTab(currentConfig.last_mode || 'client');
+        
         setupEventListener();
       }, 500);
     });

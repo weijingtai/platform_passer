@@ -99,11 +99,15 @@ pub fn macos_to_windows_vk(macos_code: u32) -> u32 {
         121 => 0x22, // Page Down
         
         // Modifiers
-        55 => 0x11, // Command -> Control (for Ctrl+C/V behavior on Windows)
+        54 => 0x5C, // R-Command -> R-Windows Key
+        55 => 0x5B, // Command -> Windows Key
         56 => 0x10, // Shift
         57 => 0x14, // Caps Lock
         58 => 0x12, // Option -> Alt
-        59 => 0x5B, // Control -> Windows Key
+        59 => 0x11, // Control -> Control
+        60 => 0x10, // R-Shift
+        61 => 0x12, // R-Option -> Alt
+        62 => 0x11, // R-Control -> Control
         
         // Arrows
         123 => 0x25, // Left
@@ -204,10 +208,11 @@ pub fn windows_to_macos_keycode(win_vk: u32) -> u16 {
 
         // Modifiers
         0x5B => 55,  // Windows Key -> Command
+        0x5C => 54,  // R-Windows Key -> R-Command
         0x10 => 56,  // Shift
         0x14 => 57,  // Caps Lock
         0x12 => 58,  // Alt -> Option
-        0x11 => 59,  // Control
+        0x11 => 59,  // Control -> Control
         
         // Arrows
         0x25 => 123, // Left

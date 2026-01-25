@@ -1,9 +1,9 @@
 use crate::events::SessionEvent;
 use crate::commands::SessionCommand;
-use crate::{log_info, log_error, log_debug, log_warn};
+use crate::{log_info, log_error};
 use anyhow::Result;
-use platform_passer_core::{Frame, ClipboardEvent, Handshake, Heartbeat, InputEvent, ScreenSide};
-use platform_passer_transport::{connect_ws};
+use platform_passer_core::{Frame, ClipboardEvent, Handshake, Heartbeat};
+use platform_passer_transport::connect_ws;
 use platform_passer_input::{InputSink, DefaultInputSink, InputSource, DefaultInputSource};
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
 use std::net::SocketAddr;
@@ -14,8 +14,8 @@ use std::time::Duration;
 use crate::clipboard_utils::{LocalClipboardContent, calculate_hash};
 use tokio_tungstenite::tungstenite::Message;
 use futures_util::{StreamExt, SinkExt};
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 
 
 pub async fn run_client_session(
@@ -169,6 +169,10 @@ pub async fn run_client_session(
                 }
 
                 if handshake_success {
+                    let mut active_files: std::collections::HashMap<u32, File> = std::collections::HashMap::new();
+                    let mut pending_sends: std::collections::HashMap<u32, PathBuf> = std::collections::HashMap::new();
+                    let mut file_id_counter = 0u32;
+
                     // 4. Active Session Loop
                     let (hb_stop_tx, mut hb_stop_rx) = mpsc::channel::<()>(1);
                     let hb_local_tx = local_tx.clone();
@@ -207,12 +211,16 @@ pub async fn run_client_session(
                                         if let Ok(frame) = bincode::deserialize::<Frame>(&bytes) {
                                             match frame {
                                                 Frame::Input(event) => {
-                                                    if let platform_passer_core::InputEvent::ScreenSwitch(side) = event {
-                                                        log_info!(&event_tx, "Focus switched to {:?}", side);
-                                                        // CRITICAL: The client being controlled should NOT swallow its own input.
-                                                        // Only the controller machine should call set_remote(true).
-                                                    } else {
-                                                        let _ = sink.inject_event(event);
+                                                    match event {
+                                                        platform_passer_core::InputEvent::ScreenSwitch(side) => {
+                                                            log_info!(&event_tx, "Focus switched to {:?}", side);
+                                                            if side == platform_passer_core::ScreenSide::Local {
+                                                                let _ = sink.reset_input();
+                                                            }
+                                                        }
+                                                        _ => {
+                                                            let _ = sink.inject_event(event);
+                                                        }
                                                     }
                                                 }
                                                 Frame::Clipboard(ClipboardEvent::Text(text)) => {
@@ -231,8 +239,69 @@ pub async fn run_client_session(
                                                     let _ = DefaultClipboard::new().set_image(data);
                                                 }
                                                 Frame::Heartbeat(_) => {},
+                                                Frame::FileTransferRequest(req) => {
+                                                    log_info!(&event_tx, "File transfer request: {} ({} bytes)", req.filename, req.file_size);
+                                                    let download_dir = std::path::Path::new("downloads");
+                                                    let _ = tokio::fs::create_dir_all(download_dir).await;
+                                                    let file_path = download_dir.join(&req.filename);
+                                                    
+                                                    match File::create(&file_path).await {
+                                                        Ok(file) => {
+                                                            active_files.insert(req.id, file);
+                                                            let _resp = Frame::FileTransferResponse(platform_passer_core::FileTransferResponse { id: req.id, accepted: true });
+                                                            let _ = ws_sink.send(Message::Binary(bincode::serialize(&_resp)?)).await;
+                                                            log_info!(&event_tx, "Accepted file transfer ID: {}", req.id);
+                                                        }
+                                                        Err(e) => {
+                                                            log_error!(&event_tx, "Failed to create file {:?}: {}", file_path, e);
+                                                            let _resp = Frame::FileTransferResponse(platform_passer_core::FileTransferResponse { id: req.id, accepted: false });
+                                                            let _ = ws_sink.send(Message::Binary(bincode::serialize(&_resp)?)).await;
+                                                        }
+                                                    }
+                                                }
+                                                Frame::FileData { id, chunk } => {
+                                                    if let Some(file) = active_files.get_mut(&id) {
+                                                        if let Err(e) = file.write_all(&chunk).await {
+                                                            log_error!(&event_tx, "Failed to write chunk for file {}: {}", id, e);
+                                                            active_files.remove(&id);
+                                                        }
+                                                    }
+                                                }
+                                                Frame::FileEnd { id } => {
+                                                    if let Some(mut file) = active_files.remove(&id) {
+                                                        let _ = file.flush().await;
+                                                        log_info!(&event_tx, "File transfer completed for ID: {}", id);
+                                                    }
+                                                }
                                                 Frame::FileTransferResponse(resp) => {
-                                                    log_info!(&event_tx, "File transfer accepted: {}", resp.accepted);
+                                                    log_info!(&event_tx, "File transfer response for ID {}: accepted={}", resp.id, resp.accepted);
+                                                    if resp.accepted {
+                                                        if let Some(path) = pending_sends.remove(&resp.id) {
+                                                            let local_tx_file = local_tx.clone();
+                                                            let event_tx_file = event_tx.clone();
+                                                            let file_id = resp.id;
+                                                            
+                                                            tokio::spawn(async move {
+                                                                match tokio::fs::File::open(&path).await {
+                                                                    Ok(mut file) => {
+                                                                        let mut buffer = vec![0u8; 65536];
+                                                                        while let Ok(n) = tokio::io::AsyncReadExt::read(&mut file, &mut buffer).await {
+                                                                            if n == 0 { break; }
+                                                                            let chunk = buffer[..n].to_vec();
+                                                                            if local_tx_file.send(Frame::FileData { id: file_id, chunk }).await.is_err() { break; }
+                                                                        }
+                                                                        let _ = local_tx_file.send(Frame::FileEnd { id: file_id }).await;
+                                                                        log_info!(&event_tx_file, "File sender completed for ID: {}", file_id);
+                                                                    }
+                                                                    Err(e) => {
+                                                                        log_error!(&event_tx_file, "Failed to open file for sending {:?}: {}", path, e);
+                                                                    }
+                                                                }
+                                                            });
+                                                        }
+                                                    } else {
+                                                        pending_sends.remove(&resp.id);
+                                                    }
                                                 }
                                                 _ => {}
                                             }
@@ -253,6 +322,26 @@ pub async fn run_client_session(
                             // C. User Command
                             Some(cmd) = cmd_rx.recv() => {
                                 match cmd {
+                                    SessionCommand::SendFile(path) => {
+                                        if path.exists() {
+                                            file_id_counter += 1;
+                                            let id = file_id_counter;
+                                            let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                            let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                                            
+                                            pending_sends.insert(id, path.clone());
+                                            let req = Frame::FileTransferRequest(platform_passer_core::FileTransferRequest {
+                                                id,
+                                                filename,
+                                                file_size,
+                                            });
+                                            if let Err(e) = local_tx.send(req).await {
+                                                log_error!(&event_tx, "Failed to send file request: {}", e);
+                                            }
+                                        } else {
+                                            log_error!(&event_tx, "File does not exist: {:?}", path);
+                                        }
+                                    },
                                     SessionCommand::Disconnect => {
                                         log_info!(&event_tx, "Disconnecting...");
                                         let _ = hb_stop_tx.send(()).await;
@@ -269,7 +358,6 @@ pub async fn run_client_session(
                                             log_error!(&event_tx, "Failed to update source config: {}", e);
                                         }
                                     },
-                                    _ => {} 
                                 }
                             }
                         }

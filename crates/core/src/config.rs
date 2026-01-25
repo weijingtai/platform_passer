@@ -5,6 +5,8 @@ pub struct AppConfig {
     pub topology: Topology,
     pub input: InputConfig,
     pub clipboard: ClipboardConfig,
+    pub last_server_ip: String,
+    pub last_mode: String,
 }
 
 impl Default for AppConfig {
@@ -13,6 +15,8 @@ impl Default for AppConfig {
             topology: Topology::default(),
             input: InputConfig::default(),
             clipboard: ClipboardConfig::default(),
+            last_server_ip: "127.0.0.1".to_string(),
+            last_mode: "client".to_string(),
         }
     }
 }

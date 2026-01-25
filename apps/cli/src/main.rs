@@ -63,9 +63,10 @@ async fn main() -> Result<()> {
 async fn run_server(bind_addr: SocketAddr) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(100);
     
+    let (_cmd_tx, cmd_rx) = mpsc::channel(1); 
     // Spawn session
     tokio::spawn(async move {
-        if let Err(e) = run_server_session(bind_addr, tx.clone()).await {
+        if let Err(e) = run_server_session(bind_addr, cmd_rx, tx.clone()).await {
              let _ = tx.send(SessionEvent::Error(e.to_string())).await;
         }
     });

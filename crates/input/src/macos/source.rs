@@ -41,7 +41,6 @@ impl MacosInputSource {
     }
 
     pub fn set_remote_impl(remote: bool) {
-        println!("InputSource: [DEBUG] set_remote({}) called", remote);
         let old = IS_REMOTE.swap(remote, Ordering::SeqCst);
         
         // REMOVED: Idempotency check caused failure to recover state
@@ -64,7 +63,7 @@ impl MacosInputSource {
             // false = cursor decoupled (Remote)
             let result = CGAssociateMouseAndMouseCursorPosition(!remote);
             if result != 0 {
-                println!("InputSource: [ERROR] CGAssociateMouseAndMouseCursorPosition failed with error: {}", result);
+                tracing::error!("InputSource: CGAssociateMouseAndMouseCursorPosition failed with error: {}", result);
             }
 
             // 2. Explicitly Hide/Show Cursor
@@ -152,7 +151,6 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 
                 let mut ignore_delta = false;
                 if delta_x.abs() > 50.0 || delta_y.abs() > 50.0 {
-                     println!("InputSource: [DEBUG] Ignored massive delta ({}, {}) - likely warp artifact", delta_x, delta_y);
                      ignore_delta = true;
                 }
 
@@ -237,10 +235,8 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
 
                 if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
                     *vc = (entry_x, entry_y);
-                    check_x = vc.0; 
                 }
                 
-                println!("DEBUG: Switching to Remote ({:?})", remote.position);
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
             }
             
@@ -288,12 +284,10 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 
                 unsafe {
                     let _ = CGWarpMouseCursorPosition(edge_pos);
-                    println!("DEBUG: [W][M] Warped cursor to edge: ({}, {})", edge_pos.x, edge_pos.y);
                 }
 
                 is_remote = false;
                 
-                println!("DEBUG: [W][M] Returning to macOS. Triggered at virtual x={:.3}", check_x);
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
             }
             }
@@ -335,7 +329,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 2 => platform_passer_core::MouseButton::Right,
                 _ => platform_passer_core::MouseButton::Middle,
             };
-            tracing::info!("InputSource: Mouse Button {:?} {}", button, if is_down { "Down" } else { "Up" });
+            tracing::trace!("InputSource: Mouse Button {:?} {}", button, if is_down { "Down" } else { "Up" });
             Some(InputEvent::MouseButton { button, is_down })
         }
         CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged => {
@@ -346,7 +340,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             if is_remote && key_code == 53 { // Escape
                  MacosInputSource::set_remote_impl(false);
                  show_notification("Returned to Local Control (Escape)");
-                 tracing::info!("InputSource: Returned to Local Control (Escape)");
+                 tracing::trace!("InputSource: Returned to Local Control (Escape)");
                  return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
             }
 
@@ -437,7 +431,7 @@ impl InputSource for MacosInputSource {
                 move |_proxy, etype, event| {
                     match etype {
                         CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
-                            println!("WARNING: CGEventTap disabled. Re-enabling...");
+                            tracing::warn!("CGEventTap disabled. Re-enabling...");
                             
                             // Use raw port re-enable using the stored tap pointer
                             let ptr_opt = tap_port_ptr_clone.lock().unwrap();
@@ -459,7 +453,6 @@ impl InputSource for MacosInputSource {
                             }
                             
                             let is_remote_now = IS_REMOTE.load(Ordering::SeqCst);
-                            let buttons_pressed = PRESSED_BUTTONS.load(Ordering::SeqCst) != 0;
                             let in_cooling = if let Ok(lock) = LAST_SWITCH_TIME.lock() {
                                 lock.map_or(false, |t| t.elapsed().as_millis() < 300)
                             } else { false };

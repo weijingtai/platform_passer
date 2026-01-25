@@ -139,4 +139,9 @@ impl InputSink for MacosInputSink {
         }
         Ok(())
     }
+
+    fn reset_input(&self) -> Result<()> {
+        // macOS sink reset logic if needed, for now no-op or simple release.
+        Ok(())
+    }
 }

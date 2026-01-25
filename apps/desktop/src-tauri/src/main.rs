@@ -103,7 +103,8 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
     *running = true;
 
     // Clear old tx if any
-    *state.command_tx.lock().unwrap() = None;
+    let (cmd_tx, cmd_rx) = mpsc::channel(10);
+    *state.command_tx.lock().unwrap() = Some(cmd_tx);
 
     let running_clone = state.running.clone();
     let log_tx_clone = state.log_tx.clone();
@@ -118,7 +119,7 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
         let bind_addr: SocketAddr = format!("{}:{}", ip, port).parse().unwrap_or_else(|_| "0.0.0.0:4433".parse().unwrap());
         
         let _session_task = tokio::spawn(async move {
-            run_server_session(bind_addr, tx).await
+            run_server_session(bind_addr, cmd_rx, tx).await
         });
         
         // Event Forwarder Loop

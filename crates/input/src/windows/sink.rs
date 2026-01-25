@@ -122,4 +122,33 @@ impl InputSink for WindowsInputSink {
     fn update_config(&self, _config: AppConfig) -> Result<()> {
         Ok(())
     }
+
+    fn reset_input(&self) -> Result<()> {
+        let modifiers = [
+            VK_LCONTROL, VK_RCONTROL,
+            VK_LSHIFT, VK_RSHIFT,
+            VK_LMENU, VK_RMENU,
+            VK_LWIN, VK_RWIN,
+        ];
+
+        let mut inputs = Vec::new();
+        for vt in modifiers {
+            let mut input = INPUT::default();
+            input.r#type = INPUT_KEYBOARD;
+            input.Anonymous.ki = KEYBDINPUT {
+                wVk: vt,
+                wScan: 0,
+                dwFlags: KEYEVENTF_KEYUP,
+                time: 0,
+                dwExtraInfo: 0,
+            };
+            inputs.push(input);
+        }
+
+        unsafe {
+            SendInput(&inputs, size_of::<INPUT>() as i32);
+        }
+
+        Ok(())
+    }
 }
