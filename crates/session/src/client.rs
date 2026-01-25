@@ -29,6 +29,7 @@ pub async fn run_client_session(
     let (local_tx, mut local_rx) = mpsc::channel::<Frame>(100);
     let sink = Arc::new(DefaultInputSink::new());
     let source = Arc::new(DefaultInputSource::new());
+    let _ = sink.reset_input();
 
     // Start Clipboard Listener Once
     let clip_tx = local_tx.clone();
@@ -365,6 +366,7 @@ pub async fn run_client_session(
                     
                     // Clean up before retry
                     let _ = source.set_remote(false); // Ensure local input capture is re-enabled
+                    let _ = sink.reset_input();
                     let _ = hb_stop_tx.send(()).await;
                 }
                 

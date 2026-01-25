@@ -18,7 +18,7 @@ The project has been successfully migrated to **Tauri v2**. Key changes include:
 - **Raw FFI for Scrolling**: Implemented scroll wheel support via direct `CoreGraphics` FFI to overcome library limitations.
 
 ### 2. Input Capture (Source)
-- Uses `CGEventTap` to capture system-wide events.
+- Uses `CGEventTap` to capture system-wide events.n
 - **Auto-Reenabling**: If the event tap is disabled by system timeout, the application automatically re-enables it.
 - **Coordinate Scaling**: Captures local display coordinates and normalizes them for transmission.
 
