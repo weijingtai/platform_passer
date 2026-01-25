@@ -122,175 +122,35 @@
   </div>
 
   <script>
-    // In Tauri v2, most APIs are moved to core or plugins
-    // If using withGlobalTauri: true
+    // --- Global State & Functions First (Hoisted implicitly or explicitly) ---
     let invoke;
     let openDialog;
-
-    try {
-      if (window.__TAURI__) {
-        invoke = window.__TAURI__.core.invoke;
-        // Dialog plugin might need to be accessed differently if not exported to global
-        // But usually it's window.__TAURI__.dialog
-        if (window.__TAURI__.dialog) {
-          openDialog = window.__TAURI__.dialog.open;
-        }
-      } else {
-        console.error("Tauri global not found. Ensure withGlobalTauri: true is set in tauri.conf.json");
-      }
-    } catch (e) {
-      console.error("Error initializing Tauri APIs:", e);
-    }
-
-    // Move outside to ensure it's globally available for debugging
     let eventListener = null;
 
-    function setupEventListener() {
-      if (window.__TAURI__) {
-        window.__TAURI__.event.listen('session-event', (event) => {
-          try {
-            console.log("Raw event payload:", event.payload);
-            const { event_type, message } = event.payload;
-            log(`[${event_type}] ${message}`); // Explicitly format to force display
-            updateStatus(event_type, message);
-          } catch (err) {
-            console.error("Event processing error:", err);
-            log(`JS Error: ${err.message}`);
-          }
-        }).then(unlisten => {
-          eventListener = unlisten;
-          log("System: Event listener fully visible.");
-        }).catch(e => log(`Listener Error: ${e}`));
-      } else {
-        console.warn("Tauri global missing during setup");
-      }
-    }
-
-    // --- Settings Logic ---
     let currentConfig = {
       topology: { local: { width: 1920, height: 1080, dpi_scale: 1.0 }, remotes: [] },
       input: { cursor_speed_multiplier: 1.0, maintain_aspect_ratio: true },
-      clipboard: { sync_enabled: true, sync_images: false }
+      clipboard: { sync_enabled: true, sync_images: false },
+      last_server_ip: "127.0.0.1",
+      last_server_port: 4433,
+      last_bind_ip: "0.0.0.0",
+      last_bind_port: 4433,
+      last_mode: "client"
     };
 
-    async function switchTab(tab) {
-      document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-      const activeTab = document.querySelector(`.tab[onclick*="switchTab('${tab}')"]`);
-      if (activeTab) activeTab.classList.add('active');
-
-      const clientView = document.getElementById('client-view');
-      const serverView = document.getElementById('server-view');
-      const settingsView = document.getElementById('settings-view');
-
-      clientView.classList.add('hidden');
-      serverView.classList.add('hidden');
-      settingsView.classList.add('hidden');
-
-      if (tab === 'client') {
-        clientView.classList.remove('hidden');
-      } else if (tab === 'settings') {
-        settingsView.classList.remove('hidden');
-        loadConfig();
-      } else { // server
-        serverView.classList.remove('hidden');
-        // Check accessibility permissions
-        if (invoke) {
-          try {
-            const isTrusted = await invoke('check_accessibility');
-            const warning = document.getElementById('accessibility-warning');
-            if (isTrusted) {
-              warning.classList.add('hidden');
-            } else {
-              warning.classList.remove('hidden');
-            }
-          } catch (e) { console.error("Accessibility check failed", e); }
-        }
-      }
-
-      // Consolidate persistence to AppConfig
-      if (currentConfig.last_mode !== tab) {
-        currentConfig.last_mode = tab;
-        saveCurrentConfig();
-      }
-    }
-
     function log(msg) {
+      console.log("GUI Log:", msg);
       const el = document.getElementById('status-log');
-      el.innerText += `\n> ${msg}`;
-      el.scrollTop = el.scrollHeight;
-    }
-
-    async function connect() {
-      const ip = document.getElementById('server-ip').value;
-      const portStr = document.getElementById('server-port').value;
-      const port = parseInt(portStr) || 4433;
-
-      // Persist to AppConfig
-      currentConfig.last_server_ip = ip;
-      currentConfig.last_server_port = port;
-      saveCurrentConfig();
-
-      log(`Connecting to ${ip}:${port}...`);
-      if (!invoke) {
-        log("Error: Tauri API 'invoke' not initialized");
-        return;
-      }
-      try {
-        const res = await invoke('connect_to', { ip, port });
-        log(res);
-      } catch (e) {
-        log(`Error: ${e}`);
-      }
-    }
-
-    async function startServer() {
-      const ip = document.getElementById('bind-ip').value;
-      const portStr = document.getElementById('bind-port').value;
-      const port = parseInt(portStr) || 4433;
-
-      // Persist to AppConfig
-      currentConfig.last_bind_ip = ip;
-      currentConfig.last_bind_port = port;
-      saveCurrentConfig();
-
-      log(`Starting server on ${ip}:${port}...`);
-      if (!invoke) {
-        log("Error: Tauri API 'invoke' not initialized");
-        return;
-      }
-      try {
-        const res = await invoke('start_server', { ip, port });
-        log(res);
-      } catch (e) {
-        log(`Error: ${e}`);
-      }
-    }
-
-    async function sendFile() {
-      if (!openDialog) {
-        log("Error: Tauri API 'dialog' not initialized. Make sure the plugin is installed and enabled.");
-        return;
-      }
-      try {
-        const selected = await openDialog({ multiple: false, directory: false });
-        if (selected) {
-          log(`Queuing file: ${selected}`);
-          if (!invoke) {
-            log("Error: invoke not initialized");
-            return;
-          }
-          const res = await invoke('send_file_action', { path: selected });
-          log(res);
-        }
-      } catch (e) {
-        console.error(e);
-        log(`Error selecting file: ${e}`);
+      if (el) {
+        el.innerText += "\n> " + msg;
+        el.scrollTop = el.scrollHeight;
       }
     }
 
     function updateStatus(type, message) {
       const statusIndicator = document.getElementById('connection-status');
       const statusText = document.getElementById('status-text');
+      if (!statusIndicator || !statusText) return;
 
       if (type === 'Connected') {
         statusIndicator.classList.add('connected');
@@ -301,120 +161,192 @@
       }
     }
 
-    function updateConfigValue(key, value) {
-      if (key === 'speed') {
-        currentConfig.input.cursor_speed_multiplier = parseFloat(value);
-        document.getElementById('speed-val').innerText = value + 'x';
-      } else if (key === 'clipboard') {
-        currentConfig.clipboard.sync_enabled = value;
-      } else if (key === 'images') {
-        currentConfig.clipboard.sync_images = value;
+    async function saveCurrentConfig() {
+      if (!invoke) {
+        console.warn("Invoke not available for saveCurrentConfig");
+        return;
       }
-    }
-
-    async function updateConfigField(field, value) {
-      currentConfig[field] = value;
-      saveCurrentConfig();
+      try {
+        const remotes = [];
+        document.querySelectorAll('.drop-zone.active').forEach(zone => {
+          const posStr = zone.getAttribute('data-pos');
+          remotes.push({
+            id: "remote-1",
+            position: posStr,
+            info: { width: 1920, height: 1080, dpi_scale: 1.0 }
+          });
+        });
+        currentConfig.topology.remotes = remotes;
+        await invoke('save_config', { config: currentConfig });
+        log("Configuration saved!");
+      } catch (e) {
+        console.error("Config Save Error:", e);
+        log("Config Save Error: " + e);
+      }
     }
 
     async function loadConfig() {
       if (!invoke) return;
       try {
         const config = await invoke('get_config');
-        currentConfig = config;
+        if (config) {
+          currentConfig = config;
 
-        // UI Update
-        document.getElementById('cursor-speed').value = config.input.cursor_speed_multiplier;
-        document.getElementById('speed-val').innerText = config.input.cursor_speed_multiplier + 'x';
-        document.getElementById('sync-clipboard').checked = config.clipboard.sync_enabled;
-        document.getElementById('sync-images').checked = config.clipboard.sync_images;
+          // Update UI
+          if (document.getElementById('cursor-speed')) document.getElementById('cursor-speed').value = config.input.cursor_speed_multiplier;
+          if (document.getElementById('speed-val')) document.getElementById('speed-val').innerText = config.input.cursor_speed_multiplier + 'x';
+          if (document.getElementById('sync-clipboard')) document.getElementById('sync-clipboard').checked = config.clipboard.sync_enabled;
+          if (document.getElementById('sync-images')) document.getElementById('sync-images').checked = config.clipboard.sync_images;
 
-        // Apply persisted IP and ports
-        document.getElementById('server-ip').value = config.last_server_ip;
-        document.getElementById('server-port').value = config.last_server_port;
-        document.getElementById('bind-ip').value = config.last_bind_ip;
-        document.getElementById('bind-port').value = config.last_bind_port;
+          if (document.getElementById('server-ip')) document.getElementById('server-ip').value = config.last_server_ip || "127.0.0.1";
+          if (document.getElementById('server-port')) document.getElementById('server-port').value = config.last_server_port || 4433;
+          if (document.getElementById('bind-ip')) document.getElementById('bind-ip').value = config.last_bind_ip || "0.0.0.0";
+          if (document.getElementById('bind-port')) document.getElementById('bind-port').value = config.last_bind_port || 4433;
 
-        renderTopology(config.topology);
+          renderTopology(config.topology);
+        }
       } catch (e) {
-        log(`Config Load Error: ${e}`);
+        console.error("Config Load Error:", e);
+        log("Config Load Error: " + e);
       }
     }
 
-    async function saveCurrentConfig() {
-      if (!invoke) return;
-      try {
-        // Reconstruct remotes from DOM state
-        const remotes = [];
-        document.querySelectorAll('.drop-zone.active').forEach(zone => {
-          const posStr = zone.getAttribute('data-pos');
-          // Simple mapping: 1 remote per config supported for now in this basic UI
-          // In a real app, we'd map specific IDs. Here we assume "Generic Remote"
-          remotes.push({
-            id: "remote-1",
-            position: posStr, // "Left", "Right", "Top", "Bottom"
-            info: { width: 1920, height: 1080, dpi_scale: 1.0 } // Placeholder
-          });
-        });
-        currentConfig.topology.remotes = remotes;
+    async function switchTab(tab) {
+      if (!tab) return;
+      document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+      const activeTab = document.querySelector(".tab[onclick*=\"switchTab('" + tab + "')\"]");
+      if (activeTab) activeTab.classList.add('active');
 
-        await invoke('save_config', { config: currentConfig });
-        log("Configuration saved!");
+      const views = ['client-view', 'server-view', 'settings-view'];
+      views.forEach(v => {
+        const el = document.getElementById(v);
+        if (el) el.classList.add('hidden');
+      });
+
+      const target = document.getElementById(tab + '-view');
+      if (target) target.classList.remove('hidden');
+
+      if (tab === 'settings') loadConfig();
+      if (tab === 'server' && invoke) {
+        try {
+          const isTrusted = await invoke('check_accessibility');
+          const warning = document.getElementById('accessibility-warning');
+          if (warning) isTrusted ? warning.classList.add('hidden') : warning.classList.remove('hidden');
+        } catch (e) { }
+      }
+
+      if (currentConfig.last_mode !== tab) {
+        currentConfig.last_mode = tab;
+        saveCurrentConfig();
+      }
+    }
+
+    async function connect() {
+      const ipEl = document.getElementById('server-ip');
+      const portEl = document.getElementById('server-port');
+      if (!ipEl || !portEl) return;
+
+      const ip = ipEl.value;
+      const port = parseInt(portEl.value) || 4433;
+
+      currentConfig.last_server_ip = ip;
+      currentConfig.last_server_port = port;
+      saveCurrentConfig();
+
+      log("Connecting to " + ip + ":" + port + "...");
+      if (!invoke) {
+        log("Error: Tauri API 'invoke' not initialized");
+        return;
+      }
+      try {
+        const res = await invoke('connect_to', { ip, port });
+        log(res);
       } catch (e) {
-        log(`Config Save Error: ${e}`);
+        log("Error: " + e);
+      }
+    }
+
+    async function startServer() {
+      const ipEl = document.getElementById('bind-ip');
+      const portEl = document.getElementById('bind-port');
+      if (!ipEl || !portEl) return;
+
+      const ip = ipEl.value;
+      const port = parseInt(portEl.value) || 4433;
+
+      currentConfig.last_bind_ip = ip;
+      currentConfig.last_bind_port = port;
+      saveCurrentConfig();
+
+      log("Starting server on " + ip + ":" + port + "...");
+      if (!invoke) {
+        log("Error: Tauri API 'invoke' not initialized");
+        return;
+      }
+      try {
+        const res = await invoke('start_server', { ip, port });
+        log(res);
+      } catch (e) {
+        log("Error: " + e);
       }
     }
 
     function renderTopology(topology) {
-      // Clear active zones
       document.querySelectorAll('.drop-zone').forEach(el => {
         el.classList.remove('active');
         el.innerText = '';
       });
-
-      // Populate from config
-      topology.remotes.forEach(remote => {
-        const zone = document.querySelector(`.drop-zone[data-pos="${remote.position}"]`);
-        if (zone) {
-          zone.classList.add('active');
-          zone.innerText = "Remote";
-        }
-      });
+      if (topology && topology.remotes) {
+        topology.remotes.forEach(remote => {
+          const zone = document.querySelector(".drop-zone[data-pos=\"" + remote.position + "\"]");
+          if (zone) {
+            zone.classList.add('active');
+            zone.innerText = "Remote";
+          }
+        });
+      }
     }
 
-    // Basic Click-to-Toggle Topology (simplification of Drag-Drop for MVP)
-    document.querySelectorAll('.drop-zone').forEach(zone => {
-      zone.addEventListener('click', () => {
-        // Toggle active state
-        if (zone.classList.contains('active')) {
-          zone.classList.remove('active');
-          zone.innerText = '';
-        } else {
-          // For MVP, only allow one remote? Or multiple? Let's allow multiple.
-          // But typically only one active edge makes sense per side.
-          // Reset others if we want exclusive single remote? No, user might have multiple screens.
-          zone.classList.add('active');
-          zone.innerText = "Remote";
+    // --- Initialization ---
+    window.addEventListener('DOMContentLoaded', () => {
+      log("System: HTML Loaded.");
+
+      // Initialize Tauri
+      try {
+        if (window.__TAURI__) {
+          invoke = window.__TAURI__.core.invoke;
+          if (window.__TAURI__.dialog) openDialog = window.__TAURI__.dialog.open;
+
+          window.__TAURI__.event.listen('session-event', (event) => {
+            const { event_type, message } = event.payload;
+            log("[" + event_type + "] " + message);
+            updateStatus(event_type, message);
+          }).then(unlisten => {
+            eventListener = unlisten;
+            log("System: Event listener active.");
+          });
         }
-      });
+      } catch (e) {
+        console.error("Tauri Init Error:", e);
+      }
+
+      // Startup Sequence
+      setTimeout(async () => {
+        try {
+          await loadConfig();
+          const tab = currentConfig.last_mode || 'client';
+          await switchTab(tab);
+          log("System: Ready.");
+        } catch (e) {
+          log("Startup Error: " + e);
+          switchTab('client');
+        }
+      }, 500);
     });
 
-    function saveTabState(tab) {
-      currentConfig.last_mode = tab;
-      saveCurrentConfig();
-    }
-
-    window.addEventListener('DOMContentLoaded', () => {
-      // Small delay to ensure Tauri global is ready
-      setTimeout(async () => {
-        // Load config first to get last used mode, IP, and ports
-        await loadConfig();
-
-        // Default to last used mode
-        switchTab(currentConfig.last_mode || 'client');
-
-        setupEventListener();
-      }, 500);
+    // Cleanup
+    window.addEventListener('unload', () => {
+      if (eventListener) eventListener();
     });
   </script>
 </body>

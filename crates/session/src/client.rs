@@ -365,6 +365,7 @@ pub async fn run_client_session(
                     
                     // Clean up before retry
                     let _ = source.set_remote(false); // Ensure local input capture is re-enabled
+                    let _ = sink.reset_input(); // Release any stuck keys
                     let _ = hb_stop_tx.send(()).await;
                 }
                 
