@@ -6,6 +6,9 @@ pub struct AppConfig {
     pub input: InputConfig,
     pub clipboard: ClipboardConfig,
     pub last_server_ip: String,
+    pub last_server_port: u16,
+    pub last_bind_ip: String,
+    pub last_bind_port: u16,
     pub last_mode: String,
 }
 
@@ -16,6 +19,9 @@ impl Default for AppConfig {
             input: InputConfig::default(),
             clipboard: ClipboardConfig::default(),
             last_server_ip: "127.0.0.1".to_string(),
+            last_server_port: 4433,
+            last_bind_ip: "0.0.0.0".to_string(),
+            last_bind_port: 4433,
             last_mode: "client".to_string(),
         }
     }

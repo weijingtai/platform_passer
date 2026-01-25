@@ -32,11 +32,13 @@
       <div style="display: flex; gap: 0.5rem;">
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 2;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Server IP</label>
-          <input type="text" id="server-ip" placeholder="Target IP" value="127.0.0.1" onchange="saveLastIp(this.value)" />
+          <input type="text" id="server-ip" placeholder="Target IP" value="127.0.0.1"
+            onchange="updateConfigField('last_server_ip', this.value)" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Port</label>
-          <input type="number" id="server-port" value="4433" placeholder="4433" />
+          <input type="number" id="server-port" value="4433" placeholder="4433"
+            onchange="updateConfigField('last_server_port', parseInt(this.value))" />
         </div>
       </div>
 
@@ -59,11 +61,13 @@
       <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 2;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Bind IP</label>
-          <input type="text" id="bind-ip" value="0.0.0.0" placeholder="0.0.0.0" />
+          <input type="text" id="bind-ip" value="0.0.0.0" placeholder="0.0.0.0"
+            onchange="updateConfigField('last_bind_ip', this.value)" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Bind Port</label>
-          <input type="number" id="bind-port" value="4433" placeholder="4433" />
+          <input type="number" id="bind-port" value="4433" placeholder="4433"
+            onchange="updateConfigField('last_bind_port', parseInt(this.value))" />
         </div>
       </div>
 
@@ -171,10 +175,6 @@
       const activeTab = document.querySelector(`.tab[onclick*="switchTab('${tab}')"]`);
       if (activeTab) activeTab.classList.add('active');
 
-      // Persist last tab
-      currentConfig.last_mode = tab;
-      saveCurrentConfig();
-
       const clientView = document.getElementById('client-view');
       const serverView = document.getElementById('server-view');
       const settingsView = document.getElementById('settings-view');
@@ -190,7 +190,6 @@
         loadConfig();
       } else { // server
         serverView.classList.remove('hidden');
-
         // Check accessibility permissions
         if (invoke) {
           try {
@@ -203,6 +202,12 @@
             }
           } catch (e) { console.error("Accessibility check failed", e); }
         }
+      }
+
+      // Consolidate persistence to AppConfig
+      if (currentConfig.last_mode !== tab) {
+        currentConfig.last_mode = tab;
+        saveCurrentConfig();
       }
     }
 
@@ -303,8 +308,8 @@
       }
     }
 
-    async function saveLastIp(ip) {
-      currentConfig.last_server_ip = ip;
+    async function updateConfigField(field, value) {
+      currentConfig[field] = value;
       saveCurrentConfig();
     }
 
@@ -320,8 +325,11 @@
         document.getElementById('sync-clipboard').checked = config.clipboard.sync_enabled;
         document.getElementById('sync-images').checked = config.clipboard.sync_images;
 
-        // Apply persisted IP
+        // Apply persisted IP and ports
         document.getElementById('server-ip').value = config.last_server_ip;
+        document.getElementById('server-port').value = config.last_server_port;
+        document.getElementById('bind-ip').value = config.last_bind_ip;
+        document.getElementById('bind-port').value = config.last_bind_port;
 
         // Apply persisted tab if we are not already in a specific tab
         // But we usually want to do this only once on startup.
@@ -389,15 +397,20 @@
       });
     });
 
+    function saveTabState(tab) {
+      currentConfig.last_mode = tab;
+      saveCurrentConfig();
+    }
+
     window.addEventListener('DOMContentLoaded', () => {
       // Small delay to ensure Tauri global is ready
       setTimeout(async () => {
-        // Load config first to get last used mode and IP
+        // Load config first to get last used mode, IP, and ports
         await loadConfig();
-        
+
         // Default to last used mode
         switchTab(currentConfig.last_mode || 'client');
-        
+
         setupEventListener();
       }, 500);
     });
