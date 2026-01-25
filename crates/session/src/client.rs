@@ -8,11 +8,26 @@ use platform_passer_input::{InputSink, DefaultInputSink, InputSource, DefaultInp
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{self, Sender, Receiver};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
 use futures_util::{StreamExt, SinkExt};
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
+
+// Helper to track last content for loop protection
+#[derive(Debug, Clone, PartialEq)]
+enum LocalClipboardContent {
+    Text(String),
+    Image(u64), // Hash of the image data
+}
+
+fn calculate_hash<T: Hash>(t: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    t.hash(&mut s);
+    s.finish()
+}
 
 pub async fn run_client_session(
     server_addr: SocketAddr, 
@@ -31,10 +46,43 @@ pub async fn run_client_session(
     let clip_log = event_tx.clone();
     let clipboard = DefaultClipboard::new();
     
+    // Loop Protection: Store last received content hash/string to avoid echo
+    let last_remote_clip = Arc::new(Mutex::new(None::<LocalClipboardContent>));
+    let last_remote_clip_listener = last_remote_clip.clone();
+
     if let Err(e) = clipboard.start_listener(Box::new(move || {
-        if let Ok(text) = DefaultClipboard::new().get_text() {
+        let clip = DefaultClipboard::new();
+        
+        // Priority 1: Text
+        if let Ok(text) = clip.get_text() {
             if !text.is_empty() {
-                let _ = clip_tx.blocking_send(Frame::Clipboard(ClipboardEvent::Text(text)));
+                // Check against last remote
+                let should_send = if let Ok(lock) = last_remote_clip_listener.lock() {
+                    match &*lock {
+                        Some(LocalClipboardContent::Text(last)) => *last != text,
+                        _ => true,
+                    }
+                } else { true };
+
+                if should_send {
+                     let _ = clip_tx.blocking_send(Frame::Clipboard(ClipboardEvent::Text(text)));
+                }
+                return;
+            }
+        }
+        
+        // Priority 2: Image
+        if let Ok(Some(img_data)) = clip.get_image() {
+            let img_hash = calculate_hash(&img_data);
+             let should_send = if let Ok(lock) = last_remote_clip_listener.lock() {
+                match &*lock {
+                    Some(LocalClipboardContent::Image(last_hash)) => *last_hash != img_hash,
+                    _ => true,
+                }
+            } else { true };
+            
+            if should_send {
+                 let _ = clip_tx.blocking_send(Frame::Clipboard(ClipboardEvent::Image { data: img_data }));
             }
         }
     })) {
@@ -81,11 +129,22 @@ pub async fn run_client_session(
                 let (mut ws_sink, mut ws_stream) = ws_stream.split();
 
                 // 3. Handshake
+                let screen_info = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        platform_passer_input::get_screen_info()
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        None
+                    }
+                };
+
                 let handshake = Frame::Handshake(Handshake {
                     version: 1,
                     client_id: "macos-client".to_string(), // TODO: Make dynamic
                     capabilities: vec!["input".to_string(), "clipboard".to_string()],
-                    screen_info: None, // TODO: Pass real screen info
+                    screen_info,
                 });
 
                 let mut handshake_success = false;
@@ -168,8 +227,19 @@ pub async fn run_client_session(
                                                     }
                                                 }
                                                 Frame::Clipboard(ClipboardEvent::Text(text)) => {
-                                                    log_info!(&event_tx, "Clipboard sync from server.");
+                                                    log_info!(&event_tx, "Clipboard sync from server (Text).");
+                                                    if let Ok(mut lock) = last_remote_clip.lock() {
+                                                        *lock = Some(LocalClipboardContent::Text(text.clone()));
+                                                    }
                                                     let _ = DefaultClipboard::new().set_text(text);
+                                                }
+                                                Frame::Clipboard(ClipboardEvent::Image { data }) => {
+                                                    log_info!(&event_tx, "Clipboard sync from server (Image, {} bytes).", data.len());
+                                                    let hash = calculate_hash(&data);
+                                                    if let Ok(mut lock) = last_remote_clip.lock() {
+                                                        *lock = Some(LocalClipboardContent::Image(hash));
+                                                    }
+                                                    let _ = DefaultClipboard::new().set_image(data);
                                                 }
                                                 Frame::Heartbeat(_) => {},
                                                 Frame::FileTransferResponse(resp) => {

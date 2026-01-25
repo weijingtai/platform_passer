@@ -66,6 +66,7 @@ pub enum ScreenPosition {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InputConfig {
     pub cursor_speed_multiplier: f32,
+    pub scroll_speed_multiplier: f32,
     pub maintain_aspect_ratio: bool,
 }
 
@@ -73,6 +74,7 @@ impl Default for InputConfig {
     fn default() -> Self {
         Self {
             cursor_speed_multiplier: 1.0,
+            scroll_speed_multiplier: 1.0,
             maintain_aspect_ratio: true,
         }
     }
