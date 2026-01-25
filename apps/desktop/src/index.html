@@ -32,13 +32,11 @@
       <div style="display: flex; gap: 0.5rem;">
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 2;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Server IP</label>
-          <input type="text" id="server-ip" placeholder="Target IP" value="127.0.0.1"
-            onchange="updateConfigField('last_server_ip', this.value)" />
+          <input type="text" id="server-ip" placeholder="Target IP" value="127.0.0.1" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Port</label>
-          <input type="number" id="server-port" value="4433" placeholder="4433"
-            onchange="updateConfigField('last_server_port', parseInt(this.value))" />
+          <input type="number" id="server-port" value="4433" placeholder="4433" />
         </div>
       </div>
 
@@ -61,13 +59,11 @@
       <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 2;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Bind IP</label>
-          <input type="text" id="bind-ip" value="0.0.0.0" placeholder="0.0.0.0"
-            onchange="updateConfigField('last_bind_ip', this.value)" />
+          <input type="text" id="bind-ip" value="0.0.0.0" placeholder="0.0.0.0" />
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.5rem; flex: 1;">
           <label style="font-size: 0.85rem; color: var(--text-secondary);">Bind Port</label>
-          <input type="number" id="bind-port" value="4433" placeholder="4433"
-            onchange="updateConfigField('last_bind_port', parseInt(this.value))" />
+          <input type="number" id="bind-port" value="4433" placeholder="4433" />
         </div>
       </div>
 
@@ -170,6 +166,13 @@
       }
     }
 
+    // --- Settings Logic ---
+    let currentConfig = {
+      topology: { local: { width: 1920, height: 1080, dpi_scale: 1.0 }, remotes: [] },
+      input: { cursor_speed_multiplier: 1.0, maintain_aspect_ratio: true },
+      clipboard: { sync_enabled: true, sync_images: false }
+    };
+
     async function switchTab(tab) {
       document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
       const activeTab = document.querySelector(`.tab[onclick*="switchTab('${tab}')"]`);
@@ -222,6 +225,11 @@
       const portStr = document.getElementById('server-port').value;
       const port = parseInt(portStr) || 4433;
 
+      // Persist to AppConfig
+      currentConfig.last_server_ip = ip;
+      currentConfig.last_server_port = port;
+      saveCurrentConfig();
+
       log(`Connecting to ${ip}:${port}...`);
       if (!invoke) {
         log("Error: Tauri API 'invoke' not initialized");
@@ -239,6 +247,11 @@
       const ip = document.getElementById('bind-ip').value;
       const portStr = document.getElementById('bind-port').value;
       const port = parseInt(portStr) || 4433;
+
+      // Persist to AppConfig
+      currentConfig.last_bind_ip = ip;
+      currentConfig.last_bind_port = port;
+      saveCurrentConfig();
 
       log(`Starting server on ${ip}:${port}...`);
       if (!invoke) {
@@ -288,15 +301,6 @@
       }
     }
 
-
-
-    // --- Settings Logic ---
-    let currentConfig = {
-      topology: { local: { width: 1920, height: 1080, dpi_scale: 1.0 }, remotes: [] },
-      input: { cursor_speed_multiplier: 1.0, maintain_aspect_ratio: true },
-      clipboard: { sync_enabled: true, sync_images: false }
-    };
-
     function updateConfigValue(key, value) {
       if (key === 'speed') {
         currentConfig.input.cursor_speed_multiplier = parseFloat(value);
@@ -331,8 +335,6 @@
         document.getElementById('bind-ip').value = config.last_bind_ip;
         document.getElementById('bind-port').value = config.last_bind_port;
 
-        // Apply persisted tab if we are not already in a specific tab
-        // But we usually want to do this only once on startup.
         renderTopology(config.topology);
       } catch (e) {
         log(`Config Load Error: ${e}`);
