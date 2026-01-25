@@ -200,6 +200,9 @@
           } catch (e) { console.error("Accessibility check failed", e); }
         }
       }
+
+      // Save selected tab to localStorage
+      localStorage.setItem('lastSelectedTab', tab);
     }
 
     function log(msg) {
@@ -212,6 +215,10 @@
       const ip = document.getElementById('server-ip').value;
       const portStr = document.getElementById('server-port').value;
       const port = parseInt(portStr) || 4433;
+
+      // Save to localStorage
+      localStorage.setItem('lastServerIp', ip);
+      localStorage.setItem('lastServerPort', portStr);
 
       log(`Connecting to ${ip}:${port}...`);
       if (!invoke) {
@@ -230,6 +237,10 @@
       const ip = document.getElementById('bind-ip').value;
       const portStr = document.getElementById('bind-port').value;
       const port = parseInt(portStr) || 4433;
+
+      // Save to localStorage
+      localStorage.setItem('lastBindIp', ip);
+      localStorage.setItem('lastBindPort', portStr);
 
       log(`Starting server on ${ip}:${port}...`);
       if (!invoke) {
@@ -375,10 +386,36 @@
       });
     });
 
+    function restoreGuiState() {
+      // Restore last used IP addresses and ports
+      const lastServerIp = localStorage.getItem('lastServerIp');
+      const lastServerPort = localStorage.getItem('lastServerPort');
+      const lastBindIp = localStorage.getItem('lastBindIp');
+      const lastBindPort = localStorage.getItem('lastBindPort');
+      const lastTab = localStorage.getItem('lastSelectedTab');
+
+      if (lastServerIp) {
+        document.getElementById('server-ip').value = lastServerIp;
+      }
+      if (lastServerPort) {
+        document.getElementById('server-port').value = lastServerPort;
+      }
+      if (lastBindIp) {
+        document.getElementById('bind-ip').value = lastBindIp;
+      }
+      if (lastBindPort) {
+        document.getElementById('bind-port').value = lastBindPort;
+      }
+
+      // Restore last selected tab (default to 'client' if not set)
+      const tabToOpen = lastTab || 'client';
+      switchTab(tabToOpen);
+    }
+
     window.addEventListener('DOMContentLoaded', () => {
       // Small delay to ensure Tauri global is ready
       setTimeout(() => {
-        switchTab('client');
+        restoreGuiState();
         setupEventListener();
       }, 500);
     });
