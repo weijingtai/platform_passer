@@ -51,9 +51,9 @@ This document outlines the tasks for the macOS developer to ensure parity with t
     - [x] Tightened keep-alive to 5s.
 - [x] **Logging**:
     - [x] Detailed session events forwarded to GUI console.
-- [ ] **Connection Resilience**:
-    - [ ] **Auto-Reconnect**: Implement loop to retry connection if server is unavailable or drops.
-    - [ ] **Startup Independence**: Allow client to start and wait for server, rather than failing immediately.
+- [x] **Connection Resilience**:
+    - [x] **Auto-Reconnect**: Implement loop to retry connection if server is unavailable or drops.
+    - [x] **Startup Independence**: Allow client to start and wait for server, rather than failing immediately.
 
 ### 6. Permissions & UX <!-- id: mac_perms -->
 - [x] **Accessibility Check**:
@@ -72,13 +72,13 @@ This document outlines the tasks for the macOS developer to ensure parity with t
 > Detailed Plan: [docs/macos/plan_phase2_ux.md](./plan_phase2_ux.md)
 
 ### 8. Screen & Input
-- [ ] **Screen Info**: Implement `get_screen_info` (Resolution, DPI).
-- [ ] **Dynamic Topology**: Update `source.rs` to support configurable edges (Top/Bottom/Left/Right).
-- [ ] **Input Speed**: Testing speed multiplier on macOS Sink.
+- [x] **Screen Info**: Implement `get_screen_info` (Resolution, DPI).
+- [x] **Dynamic Topology**: Update `source.rs` to support configurable edges (Top/Bottom/Left/Right).
+- [x] **Input Speed**: Testing speed multiplier on macOS Sink.
 
 ### 9. Advanced Clipboard
-- [ ] **Image Support**: 
-    - [ ] `NSPasteboard` read/write PNG.
+- [x] **Image Support**: 
+    - [x] `NSPasteboard` read/write PNG.
 
 
 ## 🤝 Synchronization Points

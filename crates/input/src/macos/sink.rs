@@ -6,15 +6,19 @@ use core_graphics::geometry::CGPoint;
 use foreign_types::ForeignType;
 use platform_passer_core::InputEvent;
 use std::sync::Mutex;
+// Actually, let's use a Mutex<f32> for simplicity as Sink isn't extremely high contention.
+use platform_passer_core::config::AppConfig;
 
 pub struct MacosInputSink {
     last_pos: Mutex<CGPoint>,
+    scroll_multiplier: Mutex<f32>,
 }
 
 impl MacosInputSink {
     pub fn new() -> Self {
         Self {
             last_pos: Mutex::new(CGPoint::new(0.0, 0.0)),
+            scroll_multiplier: Mutex::new(1.0),
         }
     }
 }
@@ -108,7 +112,10 @@ impl InputSink for MacosInputSink {
                         source_ptr,
                         0, // Pixel units
                         1, // wheel count
-                        dy as i32,
+                        {
+                            let mult = if let Ok(guard) = self.scroll_multiplier.lock() { *guard } else { 1.0 };
+                            (dy as f32 * mult) as i32
+                        },
                         0,
                         0,
                     );
@@ -123,6 +130,13 @@ impl InputSink for MacosInputSink {
             }
         }
 
+        Ok(())
+    }
+
+    fn update_config(&self, config: AppConfig) -> Result<()> {
+        if let Ok(mut guard) = self.scroll_multiplier.lock() {
+            *guard = config.input.scroll_speed_multiplier;
+        }
         Ok(())
     }
 }

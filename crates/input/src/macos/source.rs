@@ -1,6 +1,7 @@
 use crate::InputSource;
 use anyhow::{Result, anyhow};
 use platform_passer_core::InputEvent;
+use platform_passer_core::config::{AppConfig, Topology, ScreenPosition};
 use std::sync::Arc;
 use std::thread;
 use core_foundation::runloop::{CFRunLoop, kCFRunLoopCommonModes};
@@ -25,6 +26,8 @@ static PRESSED_BUTTONS: AtomicU8 = AtomicU8::new(0); // Bitmask: 1=Left, 2=Right
 static LAST_SWITCH_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 static VIRTUAL_CURSOR: Mutex<(f32, f32)> = Mutex::new((0.0, 0.0));
 static DISPLAY_CACHE: Mutex<Option<(f32, f32)>> = Mutex::new(None);
+static TOPOLOGY: Mutex<Option<Topology>> = Mutex::new(None);
+static ACTIVE_REMOTE_POS: Mutex<Option<ScreenPosition>> = Mutex::new(None);
 
 pub struct MacosInputSource {
     run_loop: Arc<Mutex<Option<CFRunLoop>>>,
@@ -79,7 +82,14 @@ impl MacosInputSource {
             }
         }
     }
+
+    fn update_topology(topology: Topology) {
+        if let Ok(mut lock) = TOPOLOGY.lock() {
+            *lock = Some(topology);
+        }
+    }
 }
+
 
 // Optimization: Refresh display bounds only when needed, not on every mouse tick.
 fn get_display_bounds() -> (f32, f32) {
@@ -169,34 +179,108 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
 
             // Switch to Remote: Triggered when at macOS LEFT edge
             // Switch to Remote: Triggered when at macOS LEFT edge
-            if !is_remote && abs_x <= 0.002 {
+            // Switch to Remote: Check configured edges
+            let mut triggered_remote = None;
+            if !is_remote {
+                 // Default to Left if no topology (Backwards comp)
+                 let mut checked = false;
+                 if let Ok(guard) = TOPOLOGY.lock() {
+                     if let Some(topo) = &*guard {
+                         checked = true;
+                         for remote in &topo.remotes {
+                             let hit = match remote.position {
+                                 ScreenPosition::Left => abs_x <= 0.002,
+                                 ScreenPosition::Right => abs_x >= 0.998,
+                                 ScreenPosition::Top => abs_y <= 0.002,
+                                 ScreenPosition::Bottom => abs_y >= 0.998,
+                             };
+                             if hit {
+                                 triggered_remote = Some(remote.clone());
+                                 break;
+                             }
+                         }
+                     }
+                 }
+                 
+                 // Fallback: Default Left Edge if config missing
+                 if !checked && abs_x <= 0.002 {
+                     // create dummy remote for fallback
+                     // This is tricky without a real object, but we just set IS_REMOTE.
+                     // We'll set ACTIVE_REMOTE_POS to Left.
+                     if let Ok(mut pos) = ACTIVE_REMOTE_POS.lock() { *pos = Some(ScreenPosition::Left); }
+                     IS_REMOTE.store(true, Ordering::SeqCst);
+                     is_remote = true;
+                     // Init VC at Right Edge (Assuming Left Remote)
+                     if let Ok(mut vc) = VIRTUAL_CURSOR.lock() { *vc = (0.950, abs_y); check_x = vc.0; }
+                     return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
+                 }
+            }
+
+            if let Some(remote) = triggered_remote {
                 IS_REMOTE.store(true, Ordering::SeqCst);
                 is_remote = true;
                 
-                // Initialize Virtual Cursor at the RIGHT edge of Windows
-                // Use 0.950 to provide SIGNIFICANT hysteresis (avoid immediate return)
+                // Store active position
+                if let Ok(mut pos) = ACTIVE_REMOTE_POS.lock() { *pos = Some(remote.position.clone()); }
+
+                // Determine entry point on REMOTE screen
+                // If we exit Local Left -> Enter Remote Right (x=0.95)
+                // If we exit Local Right -> Enter Remote Left (x=0.05)
+                // If we exit Local Top -> Enter Remote Bottom (y=0.95)
+                // If we exit Local Bottom -> Enter Remote Top (y=0.05)
+                let (entry_x, entry_y) = match remote.position {
+                    ScreenPosition::Left => (0.950, abs_y),
+                    ScreenPosition::Right => (0.050, abs_y),
+                    ScreenPosition::Top => (abs_x, 0.950),
+                    ScreenPosition::Bottom => (abs_x, 0.050),
+                };
+
                 if let Ok(mut vc) = VIRTUAL_CURSOR.lock() {
-                    *vc = (0.950, abs_y);
-                    check_x = vc.0; // CRITICAL: Update decision variable for this frame!
+                    *vc = (entry_x, entry_y);
+                    check_x = vc.0; 
                 }
                 
-                println!("DEBUG: [W][M] Entering Windows (Left) from macOS (Right). Triggered at physical x={:.3}. Entry virtual x=0.95", abs_x);
-                // Return immediately to prevent falling through to "Return to Local" check in the same frame
+                println!("DEBUG: Switching to Remote ({:?})", remote.position);
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Remote));
             }
             
-            // Return to Local: Triggered when Virtual Cursor hits RIGHT edge of Windows
-            // Use 0.998 threshold.
-            if is_remote && check_x >= 0.998 {
-                // Restore cursor to Left Edge (Topology: Windows | macOS)
-                // Use x=10.0 as a safe buffer.
-                // Restore Y from Virtual Cursor to maintain continuity.
-                let return_y = if let Ok(vc) = VIRTUAL_CURSOR.lock() { vc.1 } else { 0.5 };
-                let (bounds_w, bounds_h) = get_display_bounds();
-                let edge_pos = core_graphics::geometry::CGPoint { 
-                    x: 10.0, 
-                    y: (return_y * bounds_h) as f64
+            // Return to Local
+            if is_remote {
+                let active_pos = if let Ok(guard) = ACTIVE_REMOTE_POS.lock() { guard.clone().unwrap_or(ScreenPosition::Left) } else { ScreenPosition::Left };
+                
+                let should_return = match active_pos {
+                    ScreenPosition::Left => check_x >= 0.998, // Remote is on Left, so we return when Remote Cursor hits Right
+                    ScreenPosition::Right => check_x <= 0.002, // Remote is on Right, return when Remote Cursor hits Left
+                    ScreenPosition::Top => { 
+                         // Check Y. We need check_y?
+                         // Current logic uses check_x for everything. We need to check Y for Top/Bottom!
+                         // But we calculated vc in handle_event start. We need access to vc.1.
+                         // check_x was set to vc.0.
+                         // Let's get y from VIRTUAL_CURSOR lock again or assume we need to change check var.
+                         // Hack: Read vc again.
+                         let vc_y = if let Ok(vc) = VIRTUAL_CURSOR.lock() { vc.1 } else { 0.5 };
+                         vc_y >= 0.998
+                    },
+                    ScreenPosition::Bottom => {
+                         let vc_y = if let Ok(vc) = VIRTUAL_CURSOR.lock() { vc.1 } else { 0.5 };
+                         vc_y <= 0.002
+                    },
                 };
+
+                if should_return {
+                    // Restore to appropriate edge
+                    let (bounds_w, bounds_h) = get_display_bounds();
+                    let (ret_x, ret_y) = match active_pos {
+                        ScreenPosition::Left => (10.0, if let Ok(vc) = VIRTUAL_CURSOR.lock() { vc.1 } else { 0.5 } * bounds_h),
+                        ScreenPosition::Right => (bounds_w - 10.0, if let Ok(vc) = VIRTUAL_CURSOR.lock() { vc.1 } else { 0.5 } * bounds_h),
+                        ScreenPosition::Top => (if let Ok(vc) = VIRTUAL_CURSOR.lock() { vc.0 } else { 0.5 } * bounds_w, 10.0),
+                        ScreenPosition::Bottom => (if let Ok(vc) = VIRTUAL_CURSOR.lock() { vc.0 } else { 0.5 } * bounds_w, bounds_h - 10.0),
+                    };
+
+                    let edge_pos = core_graphics::geometry::CGPoint { 
+                        x: ret_x as f64, 
+                        y: ret_y as f64
+                    };
 
                 // CRITICAL: Call set_remote(false) FIRST to re-associate.
                 // THEN warp. If we warp while disassociated, the re-association might snap back to the "Center Lock" hardware position.
@@ -211,6 +295,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 
                 println!("DEBUG: [W][M] Returning to macOS. Triggered at virtual x={:.3}", check_x);
                 return Some(InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local));
+            }
             }
 
             if !is_remote { return None; }
@@ -417,7 +502,7 @@ impl InputSource for MacosInputSource {
                                         Some(event.to_owned())
                                     }
                                 }
-                            } else if was_remote_initially || buttons_pressed || in_cooling {
+                            } else if was_remote_initially || in_cooling {
                                 // Transitioning or Protected period
                                 match etype {
                                     CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged => {
@@ -485,6 +570,11 @@ impl InputSource for MacosInputSource {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn update_config(&self, config: AppConfig) -> Result<()> {
+        MacosInputSource::update_topology(config.topology);
         Ok(())
     }
 }
