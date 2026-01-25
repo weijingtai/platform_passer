@@ -12,7 +12,21 @@
     "withGlobalTauri": true,
     "security": {
       "csp": null,
-      "capabilities": []
+      "capabilities": [
+        {
+          "identifier": "main-capability",
+          "description": "Main window capabilities",
+          "windows": ["main"],
+          "permissions": [
+            "core:event:allow-listen",
+            "core:event:allow-emit",
+            "core:webview:allow-internal-toggle-devtools",
+            "notification:allow-is-permission-granted",
+            "notification:allow-request-permission",
+            "notification:allow-show"
+          ]
+        }
+      ]
     },
     "windows": [
       {

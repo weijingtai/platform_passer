@@ -87,6 +87,10 @@ pub async fn run_client_session(
     })) {
         log_error!(&input_log, "Failed to start input capture: {}", e);
     }
+    
+    // CRITICAL: Client should NEVER enter Remote mode (edge detection disabled)
+    // Force Local mode to prevent cursor freeze
+    let _ = source.set_remote(false);
 
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(30);

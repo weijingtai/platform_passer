@@ -13,13 +13,10 @@ use std::path::PathBuf;
 use platform_passer_session::logging::GuiLogLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use std::io::Write;
 use platform_passer_core::config::AppConfig;
-
-// Shared log sender for GUI updates
-struct LogState {
-    tx: Arc<Mutex<Option<mpsc::Sender<SessionEvent>>>>,
-}
+// struct LogState {
+//     tx: Arc<Mutex<Option<mpsc::Sender<SessionEvent>>>>,
+// }
 
 // Simple state to hold active session handle? 
 struct AppState {
@@ -132,6 +129,7 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
             let (event_type, message) = match event {
                 SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
                 SessionEvent::Connected(ref s) => {
+                    eprintln!("DEBUG: Received Connected event in event loop: {}", s);
                     let enabled = config_clone.lock().unwrap().notifications_enabled;
                     if enabled {
                          let _ = app_handle.notification().builder()

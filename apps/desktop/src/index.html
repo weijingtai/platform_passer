@@ -338,6 +338,7 @@
 
           window.__TAURI__.event.listen('session-event', (event) => {
             const { event_type, message } = event.payload;
+            console.log("Received session-event:", event_type, message);
             log("[" + event_type + "] " + message);
             updateStatus(event_type, message);
           }).then(unlisten => {

@@ -240,10 +240,12 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                        }
                    }
                 }
-                // Fallback default
-                if GLOBAL_CONFIG.lock().unwrap().is_none() && abs_x >= 0.998 {
-                    trigger_remote = true;
-                }
+                // REMOVED: Fallback default edge detection
+                // This caused Client to accidentally enter Remote mode and freeze cursor
+                // Edge detection should ONLY happen when explicitly configured via Topology
+                // if GLOBAL_CONFIG.lock().unwrap().is_none() && abs_x >= 0.998 {
+                //     trigger_remote = true;
+                // }
 
                 if trigger_remote {
                     // Switch to Remote
