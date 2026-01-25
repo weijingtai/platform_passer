@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub last_bind_ip: String,
     pub last_bind_port: u16,
     pub last_mode: String,
+    pub notifications_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -23,6 +24,7 @@ impl Default for AppConfig {
             last_bind_ip: "0.0.0.0".to_string(),
             last_bind_port: 4433,
             last_mode: "client".to_string(),
+            notifications_enabled: true,
         }
     }
 }

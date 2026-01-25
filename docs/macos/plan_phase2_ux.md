@@ -63,9 +63,20 @@ This document outlines the specific implementation steps required on macOS to su
     -   **Action**: Update `source.rs` to respect the dynamic `Topology` config (e.g., "Switch to Remote is on TOP" instead of always Right).
     -   Listen for configuration updates (via channel or shared state).
 
-## 📅 Task List (Summary for macOS)
 
-1.  [ ] **Core**: Implement `get_screen_info` using Cocoa/CoreGraphics.
-2.  [ ] **Protocol**: Update Handshake to send macOS screen specs.
-3.  [ ] **Clipboard**: Implement Image support in `crates/clipboard/src/macos.rs`.
-4.  [ ] **Input**: Refactor `source.rs` to support top/bottom/left edges based on config.
+## 5. Notifications & Background (Phase 3)
+
+**Objective**: Provide feedback and background persistence as requested.
+
+### Implementation Details
+- **Notifications**:
+    - Use `tauri-plugin-notification`.
+    - **macOS Requirement**: `NSUserNotificationAlertStyle` is determined by system settings. 
+    - Permission request logic handled by Tauri.
+- **Background Mode (Tray)**:
+    - Use `tauri-plugin-system-tray`.
+    - **App Bundle**: Ensure `Info.plist` is correct if we want to support "LSUIElement" (Tray Only) mode in the future.
+    - **Behavior**:
+        - On `Cmd+W` or Close button: Hide window, do NOT quit.
+        - Add Tray Menu: "Open Platform Passer", "Quit".
+

@@ -7,13 +7,19 @@ use windows::Win32::Foundation::*;
 use std::sync::Mutex;
 use platform_passer_core::config::AppConfig;
 use std::mem::size_of;
+use std::collections::HashSet;
 
-
-pub struct WindowsInputSink;
+pub struct WindowsInputSink {
+    pressed_keys: Mutex<HashSet<u16>>,
+    pressed_buttons: Mutex<HashSet<u32>>,
+}
 
 impl WindowsInputSink {
     pub fn new() -> Self {
-        Self
+        Self {
+            pressed_keys: Mutex::new(HashSet::new()),
+            pressed_buttons: Mutex::new(HashSet::new()),
+        }
     }
 }
 
@@ -28,8 +34,18 @@ impl InputSink for WindowsInputSink {
                 if !is_down {
                     flags |= KEYEVENTF_KEYUP;
                 }
+                
+                let vk = key_code as u16;
+                if let Ok(mut keys) = self.pressed_keys.lock() {
+                    if is_down {
+                        keys.insert(vk);
+                    } else {
+                        keys.remove(&vk);
+                    }
+                }
+
                 input.Anonymous.ki = KEYBDINPUT {
-                    wVk: VIRTUAL_KEY(key_code as u16),
+                    wVk: VIRTUAL_KEY(vk),
                     wScan: 0,
                     dwFlags: flags,
                     time: 0,
@@ -62,6 +78,22 @@ impl InputSink for WindowsInputSink {
                     (MouseButton::Middle, true) => MOUSEEVENTF_MIDDLEDOWN,
                     (MouseButton::Middle, false) => MOUSEEVENTF_MIDDLEUP,
                 };
+
+                // Track button state
+                let btn_flag = match button {
+                    MouseButton::Left => 1, // Custom ID logic
+                    MouseButton::Right => 2,
+                    MouseButton::Middle => 3,
+                };
+                
+                if let Ok(mut btns) = self.pressed_buttons.lock() {
+                    if is_down {
+                        btns.insert(btn_flag);
+                    } else {
+                        btns.remove(&btn_flag);
+                    }
+                }
+
                 input.Anonymous.mi = MOUSEINPUT {
                     dx: 0,
                     dy: 0,
@@ -124,31 +156,55 @@ impl InputSink for WindowsInputSink {
     }
 
     fn reset_input(&self) -> Result<()> {
-        let modifiers = [
-            VK_LCONTROL, VK_RCONTROL,
-            VK_LSHIFT, VK_RSHIFT,
-            VK_LMENU, VK_RMENU,
-            VK_LWIN, VK_RWIN,
-        ];
-
         let mut inputs = Vec::new();
-        for vt in modifiers {
-            let mut input = INPUT::default();
-            input.r#type = INPUT_KEYBOARD;
-            input.Anonymous.ki = KEYBDINPUT {
-                wVk: vt,
-                wScan: 0,
-                dwFlags: KEYEVENTF_KEYUP,
-                time: 0,
-                dwExtraInfo: 0,
-            };
-            inputs.push(input);
+
+        // Release keys
+        if let Ok(mut keys) = self.pressed_keys.lock() {
+            for vk in keys.drain() {
+                let mut input = INPUT::default();
+                input.r#type = INPUT_KEYBOARD;
+                input.Anonymous.ki = KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(vk),
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                };
+                inputs.push(input);
+            }
         }
 
-        unsafe {
-            SendInput(&inputs, size_of::<INPUT>() as i32);
+        // Release mouse buttons
+        if let Ok(mut btns) = self.pressed_buttons.lock() {
+            for btn in btns.drain() {
+                let flags = match btn {
+                    1 => MOUSEEVENTF_LEFTUP,
+                    2 => MOUSEEVENTF_RIGHTUP,
+                    3 => MOUSEEVENTF_MIDDLEUP,
+                    _ => continue,
+                };
+                
+                let mut input = INPUT::default();
+                input.r#type = INPUT_MOUSE;
+                input.Anonymous.mi = MOUSEINPUT {
+                    dx: 0,
+                    dy: 0,
+                    mouseData: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                };
+                inputs.push(input);
+            }
+        }
+
+        if !inputs.is_empty() {
+            unsafe {
+                SendInput(&inputs, size_of::<INPUT>() as i32);
+            }
         }
 
         Ok(())
     }
 }
+
