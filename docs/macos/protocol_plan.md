@@ -60,5 +60,5 @@ The application uses a **Server-Controlled** architecture:
 ---
 
 ## 5. Security
-- **TLS**: QUIC mandatory TLS 1.3.
-- **Certificates**: Currently using self-signed certificates with **Server Verification Skip** on the client side for development ease. Production will require a more robust PKI.
+- **Local Network**: Currently optimized for high-performance local network use.
+- **WebSocket Security**: Standard `ws://` used for development. Production deployments can use `wss://` (TLS) via standard WebSocket certificates.

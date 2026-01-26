@@ -12,7 +12,7 @@ use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
-    CS_DBLCLKS, MSG, WNDCLASSW, WS_OVERLAPPEDWINDOW, WM_CLIPBOARDUPDATE, WM_DESTROY,
+    CS_DBLCLKS, MSG, WNDCLASSW, WM_CLIPBOARDUPDATE, WM_DESTROY,
     HMENU, WINDOW_EX_STYLE,
 };
 use arboard::{Clipboard, ImageData};
@@ -200,7 +200,7 @@ impl ClipboardProvider for WindowsClipboard {
                 WINDOW_EX_STYLE(0),
                 window_class_name,
                 title,
-                windows::Win32::UI::WindowsAndMessaging::WS_POPUP, // Use POPUP instead of OVERLAPPEDWINDOW
+                windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(0), // True message-only window, no GUI styles
                 0, 0, 0, 0,
                 hwnd_message, // Parent = HWND_MESSAGE
                 HMENU(0),

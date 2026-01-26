@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+    <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+        <security>
+            <requestedPrivileges>
+                <!-- 
+                  uiAccess="true" allows the application to bypass UIPI and interact with higher-privileged windows
+                  (e.g., Task Manager, Admin prompts), BUT only if:
+                  1. The app is digitally signed with a trusted certificate.
+                  2. The app is running from a secure location (Program Files, System32).
+                -->
+                <requestedExecutionLevel level="asInvoker" uiAccess="true" />
+            </requestedPrivileges>
+        </security>
+    </trustInfo>
+</assembly>

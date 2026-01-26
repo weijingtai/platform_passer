@@ -86,6 +86,10 @@ async fn run_server(bind_addr: SocketAddr) -> Result<()> {
             SessionEvent::Connected(addr) => info!("Connected: {}", addr),
             SessionEvent::Disconnected => info!("Disconnected"),
             SessionEvent::Error(msg) => error!("{}", msg),
+            SessionEvent::Waiting(msg) => info!("Waiting: {}", msg),
+            SessionEvent::Connecting(addr) => info!("Connecting to: {}", addr),
+            SessionEvent::Reconnecting(addr) => info!("Reconnecting to: {}", addr),
+
         }
     }
     Ok(())
@@ -115,6 +119,10 @@ async fn run_client(server_addr: SocketAddr, send_file_path: Option<PathBuf>) ->
             SessionEvent::Connected(addr) => info!("Connected: {}", addr),
             SessionEvent::Disconnected => info!("Disconnected"),
             SessionEvent::Error(msg) => error!("{}", msg),
+            SessionEvent::Waiting(msg) => info!("Waiting: {}", msg),
+            SessionEvent::Connecting(addr) => info!("Connecting to: {}", addr),
+            SessionEvent::Reconnecting(addr) => info!("Reconnecting to: {}", addr),
+
         }
     }
     Ok(())

@@ -9,13 +9,18 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     KEYEVENTF_KEYUP, VIRTUAL_KEY,
 };
 use std::mem::size_of;
+use std::sync::Mutex;
 use platform_passer_core::config::AppConfig;
 
-pub struct WindowsInputSink;
+pub struct WindowsInputSink {
+    last_pos: Mutex<(i32, i32)>,
+}
 
 impl WindowsInputSink {
     pub fn new() -> Self {
-        Self
+        Self {
+            last_pos: Mutex::new((0, 0)),
+        }
     }
 }
 
@@ -25,7 +30,12 @@ impl InputSink for WindowsInputSink {
             InputEvent::MouseMove { x, y } => {
                 let dx = (x * 65535.0) as i32;
                 let dy = (y * 65535.0) as i32;
-                let mut input = INPUT {
+                
+                if let Ok(mut pos) = self.last_pos.lock() {
+                    *pos = (dx, dy);
+                }
+
+                let input = INPUT {
                     r#type: INPUT_MOUSE,
                     Anonymous: INPUT_0 {
                         mi: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEINPUT {
@@ -46,14 +56,21 @@ impl InputSink for WindowsInputSink {
                     MouseButton::Right => if is_down { MOUSEEVENTF_RIGHTDOWN } else { MOUSEEVENTF_RIGHTUP },
                     MouseButton::Middle => if is_down { MOUSEEVENTF_MIDDLEDOWN } else { MOUSEEVENTF_MIDDLEUP },
                 };
-                let mut input = INPUT {
+
+                let (dx, dy) = if let Ok(pos) = self.last_pos.lock() {
+                    *pos
+                } else {
+                    (0, 0)
+                };
+
+                let input = INPUT {
                     r#type: INPUT_MOUSE,
                     Anonymous: INPUT_0 {
                         mi: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEINPUT {
-                            dx: 0,
-                            dy: 0,
+                            dx,
+                            dy,
                             mouseData: 0,
-                            dwFlags: flags,
+                            dwFlags: flags | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE,
                             time: 0,
                             dwExtraInfo: 0,
                         },
@@ -63,7 +80,7 @@ impl InputSink for WindowsInputSink {
             }
             InputEvent::Scroll { dx, dy } => {
                 if dy != 0.0 {
-                    let mut input = INPUT {
+                    let input = INPUT {
                         r#type: INPUT_MOUSE,
                         Anonymous: INPUT_0 {
                             mi: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEINPUT {
@@ -79,7 +96,7 @@ impl InputSink for WindowsInputSink {
                     unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
                 }
                 if dx != 0.0 {
-                    let mut input = INPUT {
+                    let input = INPUT {
                         r#type: INPUT_MOUSE,
                         Anonymous: INPUT_0 {
                             mi: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEINPUT {
@@ -98,7 +115,7 @@ impl InputSink for WindowsInputSink {
             InputEvent::Keyboard { key_code, is_down } => {
                 use windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS;
                 let flags = if is_down { KEYBD_EVENT_FLAGS(0) } else { KEYEVENTF_KEYUP };
-                let mut input = INPUT {
+                let input = INPUT {
                     r#type: INPUT_KEYBOARD,
                     Anonymous: INPUT_0 {
                         ki: windows::Win32::UI::Input::KeyboardAndMouse::KEYBDINPUT {
