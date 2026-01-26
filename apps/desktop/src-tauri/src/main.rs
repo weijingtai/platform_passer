@@ -159,6 +159,12 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
         
         *running_clone.lock().unwrap() = false;
         *log_tx_clone.lock().unwrap() = None;
+
+        // Final state reset back to GUI
+        let _ = window.emit("session-event", Payload { 
+            event_type: "Disconnected".to_string(), 
+            message: "Server stopped".to_string() 
+        });
     });
 
     "Server starting...".to_string()
@@ -228,13 +234,41 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
                 tracing::error!("Failed to emit session-event to GUI: {}", e);
             }
         }
+        
         *running_clone.lock().unwrap() = false;
         *tx_clone.lock().unwrap() = None;
         *log_tx_clone.lock().unwrap() = None;
+        
+        // Final state reset back to GUI
+        let _ = window.emit("session-event", Payload { 
+            event_type: "Disconnected".to_string(), 
+            message: "Session terminated".to_string() 
+        });
     });
 
     format!("Connecting to {}:{}...", ip, port)
 }
+
+#[command]
+fn stop_session(state: State<AppState>) -> String {
+    let tx_opt = state.command_tx.lock().unwrap();
+    if let Some(tx) = &*tx_opt {
+        let tx_clone = tx.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = tx_clone.send(SessionCommand::Disconnect).await;
+        });
+        "Disconnecting...".to_string()
+    } else {
+        "No active session".to_string()
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+struct Payload {
+    event_type: String,
+    message: String,
+}
+
 
 #[command]
 fn check_accessibility() -> bool {
@@ -247,6 +281,7 @@ fn check_accessibility() -> bool {
         true
     }
 }
+
 
 #[command]
 fn hide_from_dock() -> Result<(), String> {
@@ -309,11 +344,7 @@ fn test_notification(app: tauri::AppHandle) -> Result<String, String> {
     }
 }
 
-#[derive(serde::Serialize, Clone)]
-struct Payload {
-    event_type: String,
-    message: String,
-}
+
 
 fn main() {
     let filter = "debug,quinn=debug,rustls=info"; // Force debug for now to help user
@@ -377,7 +408,8 @@ fn main() {
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let hide_dock_i = MenuItem::with_id(app, "hide_dock", "Hide from Dock", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &hide_dock_i, &quit_i])?;
+            let disconnect_i = MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_i, &disconnect_i, &hide_dock_i, &quit_i])?;
             
             // Get app icon for tray
             let icon = app.default_window_icon().cloned();
@@ -415,6 +447,16 @@ fn main() {
                                 }
                             }
                         }
+                        "disconnect" => {
+                            let state: State<AppState> = app.state();
+                            let tx_opt = state.command_tx.lock().unwrap();
+                            if let Some(tx) = &*tx_opt {
+                                let tx_clone = tx.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = tx_clone.send(SessionCommand::Disconnect).await;
+                                });
+                            }
+                        }
                         _ => {}
                     }
                 })
@@ -429,6 +471,25 @@ fn main() {
                 })
                 .build(app)?;
             
+            
+            // Explicitly set window icon
+            if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "windows")]
+                {
+                    // Load the icon from the resource directory or embed it
+                    // For simplicity, let's try to load it from the App's resource path if possible, 
+                    // or use the default app icon which should be bundled.
+                    // Actually, let's trust Tauri's default bundle logic first.
+                    // If that fails, we can try: 
+                    // window.set_icon(app.default_window_icon().unwrap().clone())
+                }
+                
+                // Try to force set the icon again using the app's default icon
+                 if let Some(icon) = app.default_window_icon() {
+                     let _ = window.set_icon(icon.clone());
+                 }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -452,7 +513,7 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action, check_accessibility, get_config, save_config, hide_from_dock, show_in_dock, test_notification])
+        .invoke_handler(tauri::generate_handler![start_server, connect_to, stop_session, send_file_action, check_accessibility, get_config, save_config, hide_from_dock, show_in_dock, test_notification])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {

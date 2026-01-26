@@ -61,10 +61,12 @@ impl InputSource for WindowsInputSource {
     fn stop_capture(&self) -> Result<()> {
         unsafe {
             if KEYBOARD_HOOK.0 != 0 {
-                UnhookWindowsHookEx(KEYBOARD_HOOK);
+                let _ = UnhookWindowsHookEx(KEYBOARD_HOOK);
+                KEYBOARD_HOOK = HHOOK::default();
             }
-            if MOUSE_HOOK.0 != 0 {
-                UnhookWindowsHookEx(MOUSE_HOOK);
+            if !MOUSE_HOOK.is_invalid() {
+                let _ = UnhookWindowsHookEx(MOUSE_HOOK);
+                MOUSE_HOOK = HHOOK::default();
             }
         }
         Ok(())
@@ -162,7 +164,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
         // LLMHF_INJECTED (bit 0) or LLMHF_LOWER_IL_INJECTED (bit 1)
         let injected = (ms.flags & 0x01) != 0 || (ms.flags & 0x02) != 0;
 
-        let mut is_remote = IS_REMOTE.load(Ordering::SeqCst);
+        let is_remote = IS_REMOTE.load(Ordering::SeqCst);
         let mut swallow = is_remote;
         
         let v_left = GetSystemMetrics(SM_XVIRTUALSCREEN);
@@ -201,7 +203,21 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                             *guard = Some((new_vx, new_vy));
                             
                             // Send Absolute Virtual Position
-                            event = Some(InputEvent::MouseMove { x: new_vx, y: new_vy });
+                            use std::time::{Instant, Duration};
+                            static mut LAST_SEND: Option<Instant> = None;
+                            
+                            let now = Instant::now();
+                            let should_send = unsafe {
+                                match LAST_SEND {
+                                    Some(last) => now.duration_since(last) >= Duration::from_millis(8),
+                                    None => true,
+                                }
+                            };
+
+                            if should_send {
+                                unsafe { LAST_SEND = Some(now); }
+                                event = Some(InputEvent::MouseMove { x: new_vx, y: new_vy });
+                            }
                             
                             // Re-center physical cursor
                             let _ = SetCursorPos(center_x, center_y);
@@ -250,7 +266,6 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                 if trigger_remote {
                     // Switch to Remote
                     IS_REMOTE.store(true, Ordering::SeqCst);
-                    is_remote = true;
                     swallow = true;
                     
                     // Initialize Virtual Cursor

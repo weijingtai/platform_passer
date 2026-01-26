@@ -40,7 +40,7 @@
         </div>
       </div>
 
-      <button onclick="connect()" style="margin-top: 1rem;">Connect to Server</button>
+      <button id="connect-btn" onclick="connect()" style="margin-top: 1rem;">Connect to Server</button>
 
       <div style="height: 1px; background: var(--border-color); margin: 0.5rem 0;"></div>
 
@@ -67,7 +67,7 @@
         </div>
       </div>
 
-      <button onclick="startServer()">Start Server</button>
+      <button id="server-btn" onclick="startServer()">Start Server</button>
     </div>
 
     <!-- Settings View -->
@@ -157,14 +157,49 @@
     function updateStatus(type, message) {
       const statusIndicator = document.getElementById('connection-status');
       const statusText = document.getElementById('status-text');
+      const connBtn = document.getElementById('connect-btn');
+      const servBtn = document.getElementById('server-btn');
       if (!statusIndicator || !statusText) return;
 
       if (type === 'Connected') {
         statusIndicator.classList.add('connected');
         statusText.innerText = 'Connected';
+
+        if (connBtn) {
+          connBtn.innerText = 'Disconnect';
+          connBtn.classList.add('disconnect');
+          connBtn.onclick = stopSession;
+        }
+        if (servBtn) {
+          servBtn.innerText = 'Stop Server';
+          servBtn.classList.add('disconnect');
+          servBtn.onclick = stopSession;
+        }
       } else if (type === 'Disconnected' || type === 'Error') {
         statusIndicator.classList.remove('connected');
         statusText.innerText = 'Disconnected';
+
+        if (connBtn) {
+          connBtn.innerText = 'Connect to Server';
+          connBtn.classList.remove('disconnect');
+          connBtn.onclick = connect;
+        }
+        if (servBtn) {
+          servBtn.innerText = 'Start Server';
+          servBtn.classList.remove('disconnect');
+          servBtn.onclick = startServer;
+        }
+      }
+    }
+
+    async function stopSession() {
+      if (!invoke) return;
+      log("Requesting disconnect...");
+      try {
+        const res = await invoke('stop_session');
+        log(res);
+      } catch (e) {
+        log("Disconnect Error: " + e);
       }
     }
 

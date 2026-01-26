@@ -142,6 +142,11 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
             match accept_async(stream).await {
                 Ok(ws_stream) => {
                     log_info!(&log_tx_spawn, "WebSocket handshake successful with {}", addr);
+                    
+                    if let Err(e) = ws_stream.get_ref().set_nodelay(true) {
+                        log_warn!(&log_tx_spawn, "Failed to set TCP_NODELAY on server: {}", e);
+                    }
+
                     let _ = log_tx_spawn.send(SessionEvent::Connected(addr.to_string())).await;
                     
                     if let Err(e) = handle_protocol_session(ws_stream, broadcast_rx, log_tx_spawn.clone(), source_clone, last_remote_clip_conn, pending_sends_session, broadcast_tx_session).await {
