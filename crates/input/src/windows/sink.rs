@@ -2,8 +2,9 @@ use crate::InputSink;
 use anyhow::{Result, anyhow};
 use platform_passer_core::{InputEvent, MouseButton};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::Win32::Foundation::*;
+// Note: Foundation and WindowsAndMessaging imports removed as they were partially unused or redundant in this context
+
+
 use std::sync::Mutex;
 use platform_passer_core::config::AppConfig;
 use std::mem::size_of;

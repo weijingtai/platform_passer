@@ -337,6 +337,26 @@ fn main() {
                 })
                 .build(app)?;
             
+            
+            // Explicitly set window icon
+            if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "windows")]
+                {
+                    use tauri::image::Image;
+                    // Load the icon from the resource directory or embed it
+                    // For simplicity, let's try to load it from the App's resource path if possible, 
+                    // or use the default app icon which should be bundled.
+                    // Actually, let's trust Tauri's default bundle logic first.
+                    // If that fails, we can try: 
+                    // window.set_icon(app.default_window_icon().unwrap().clone())
+                }
+                
+                // Try to force set the icon again using the app's default icon
+                 if let Some(icon) = app.default_window_icon() {
+                     let _ = window.set_icon(icon.clone());
+                 }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -9,5 +9,6 @@ pub async fn make_ws_listener(bind_addr: SocketAddr) -> Result<TcpListener> {
         .context(format!("Failed to bind TCP listener to {}", bind_addr))?;
     
     tracing::info!("WebSocket server listener created successfully on {}", bind_addr);
+    // Note: TCP_NODELAY must be set on accepted streams in the session loop
     Ok(listener)
 }
