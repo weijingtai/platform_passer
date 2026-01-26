@@ -546,11 +546,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![start_server, connect_to, stop_session, send_file_action, check_accessibility, get_config, save_config, hide_from_dock, show_in_dock, test_notification])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
+        .run(|_app_handle, _event| {
             // Handle app activation (Dock icon click on macOS)
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = event {
-                if let Some(window) = app_handle.get_webview_window("main") {
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                if let Some(window) = _app_handle.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }

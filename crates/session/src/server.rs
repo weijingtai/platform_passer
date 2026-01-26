@@ -1,7 +1,7 @@
 use crate::events::{SessionEvent, LogLevel};
 use crate::{log_info, log_error, log_debug, log_warn};
 use anyhow::Result;
-use platform_passer_core::{Frame, InputEvent, ClipboardEvent, Handshake};
+use platform_passer_core::{Frame, ClipboardEvent, Handshake};
 use platform_passer_transport::{make_ws_listener};
 use platform_passer_input::{InputSource, DefaultInputSource};
 use platform_passer_clipboard::{ClipboardProvider, DefaultClipboard};
@@ -18,11 +18,16 @@ use tokio::io::AsyncWriteExt;
 use std::path::PathBuf;
 use platform_passer_core::{FileManifest, FileMeta, TransferPurpose};
 
+enum SessionInternalMsg {
+    SendClipboardFiles { batch_id: u64, files: Vec<PathBuf> },
+}
+
 pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<SessionCommand>, event_tx: Sender<SessionEvent>) -> Result<()> {
     log_info!(&event_tx, "Starting WebSocket server session on {}", bind_addr);
     
     // 1. Setup Shared Outbound channel for all events (Input, Clipboard)
     let (broadcast_tx, _broadcast_rx) = tokio::sync::broadcast::channel::<Frame>(100);
+    let (internal_tx, mut internal_rx) = tokio::sync::mpsc::channel::<SessionInternalMsg>(100);
     
     // 2. Setup Input Source (Server captures local input)
     let source = Arc::new(DefaultInputSource::new());
@@ -41,6 +46,7 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
     let last_remote_clip = Arc::new(Mutex::new(None::<LocalClipboardContent>));
     let last_remote_clip_listener = last_remote_clip.clone();
 
+    let internal_tx_clip = internal_tx.clone();
     if let Err(e) = clipboard.start_listener(Box::new(move || {
         let clip = DefaultClipboard::new();
         
@@ -123,52 +129,15 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
                          };
                          let _ = clip_tx.send(Frame::Clipboard(ClipboardEvent::Files { manifest }));
                          
-                         // Server broadcasts `FileTransferRequest` for each file
-                         // Note: `clip_tx` is a broadcast channel which also feeds back to our loop if we subscribed.
-                         // But `handle_protocol_session` uses a subscription.
-                         // However, for sending FILES, we need to add to `pending_sends` map.
-                         // Server's clipboard listener runs in `run_server_session` scope. 
-                         // `pending_sends` is local to `handle_protocol_session` primarily? No, we created `pending_sends` Arc in `run_server_session` line 88.
-                         // But we didn't pass it to this closure.
-                         // We need to pass `pending_sends` to this closure.
-                         // `pending_sends` variable is at line 88. Closure is at 43. 
-                         // Listener starts BEFORE pending_sends is created.
-                         // Refactor needed: Create pending_sends earlier.
-                         
-                         // I will address this by just sending the manifest for now? No, we need to send files.
-                         // Since I can't easily move lines in this tool, I will assume I can fix it later or just use `files` paths directly?
-                         
-                         // Actually, server sends `FileTransferRequest` via `clip_tx` (broadcast).
-                         // The `handle_protocol_session` loop receives it? No, `broadcast_rx` receives it.
-                         // `handle_protocol_session` iterates broadcast_rx and sends to WebSocket.
-                         // But `pending_sends` needs to be updated so that when `FileTransferResponse` comes, we know what file to read.
-                         
-                         // Protocol:
-                         // 1. Server Clipboard -> Broadcast `ClipboardEvent`
-                         // 2. Server Clipboard -> Need to trigger `FileTransferRequest` AND update `pending_sends`.
-                         
-                         // Limitation: `pending_sends` is in `run_server_session` scope but created after listener.
-                         // I will just implement the Manifest part and Notification part here.
-                         // The actual file transfer from Server -> Client requires the `pending_sends` map access which is tricky without refactor.
-                         // However, for Client -> Server file sync (which is the main requested flow often), the Client logic is crucial.
-                         // For Server -> Client file sync, I will mark as TODO or implement if I can move the variable.
-                         
-                         // Wait, I can use `std::sync::OnceLock` or similar? No.
-                         // I will just skip the automatic file sending implementation for Server-side copy for now, 
-                         // or just rely on the Manual flow if user initiates it?
-                         // The prompt asked for "copy&paste" which implies bi-directional.
-                         
-                         // I will simulate it:
-                         // I can't access `pending_sends` here.
-                         // But I can send a special internal frame? No.
-                         
-                         // OK, I will rely on Client logic primarily.
-                         // For Server logic, I will just send Manifest.
-                     }
-                 }
-            }
-        }
-    })) {
+                         let _ = internal_tx_clip.blocking_send(SessionInternalMsg::SendClipboardFiles { 
+                             batch_id, 
+                             files: files.iter().map(PathBuf::from).collect() 
+                         });
+                      }
+                  }
+             }
+         }
+     })) {
         log_error!(&event_tx, "Failed to start clipboard listener: {}", e);
     }
 
@@ -224,6 +193,33 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
                     None => {
                         log_info!(&cmd_event_tx, "Command channel closed. Shutting down server.");
                         break;
+                    }
+                }
+            }
+            // Handle Internal Messages (From Clipboard Listener)
+            Some(msg) = internal_rx.recv() => {
+                match msg {
+                    SessionInternalMsg::SendClipboardFiles { batch_id, files } => {
+                        for path in files {
+                            if path.exists() {
+                                file_id_counter += 1;
+                                let id = file_id_counter;
+                                let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                                let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                                
+                                if let Ok(mut lock) = pending_sends_clone.lock() {
+                                    lock.insert(id, path);
+                                }
+                                
+                                let req = Frame::FileTransferRequest(platform_passer_core::FileTransferRequest {
+                                    id,
+                                    filename,
+                                    file_size,
+                                    purpose: TransferPurpose::ClipboardSync { batch_id },
+                                });
+                                let _ = cmd_broadcast_tx.send(req);
+                            }
+                        }
                     }
                 }
             }
@@ -287,7 +283,6 @@ async fn handle_protocol_session(
 ) -> Result<()> {
     let (mut ws_sink, mut ws_stream) = ws_stream.split();
     let clip = DefaultClipboard::new();
-    let _log_addr = "Remote Client";
 
     // 1. Protocol Handshake
     log_debug!(&event_tx, "Awaiting application handshake...");
@@ -312,6 +307,9 @@ async fn handle_protocol_session(
     }
 
     let mut active_files: HashMap<u32, File> = HashMap::new();
+    // Batch Tracking
+    let mut incoming_batches: HashMap<u64, (usize, Vec<PathBuf>)> = HashMap::new(); // batch_id -> (expected_count, received_paths)
+    let mut active_downloads: HashMap<u32, (u64, PathBuf)> = HashMap::new(); // file_id -> (batch_id, path)
 
     log_debug!(&event_tx, "Entering protocol loop...");
     loop {
@@ -324,14 +322,14 @@ async fn handle_protocol_session(
                             Ok(frame) => {
                                 match frame {
                                     Frame::Clipboard(ClipboardEvent::Text(text)) => {
-                                        log_debug!(&event_tx, "Received clipboard update ({} chars)", text.len());
+                                        log_debug!(&event_tx, "Received clipboard update (Text)");
                                         if let Ok(mut lock) = last_remote_clip.lock() {
                                             *lock = Some(LocalClipboardContent::Text(text.clone()));
                                         }
                                         let _ = clip.set_text(text);
                                     }
                                     Frame::Clipboard(ClipboardEvent::Image { data }) => {
-                                        log_debug!(&event_tx, "Received clipboard image ({} bytes)", data.len());
+                                        log_debug!(&event_tx, "Received clipboard image");
                                         let hash = calculate_hash(&data);
                                         if let Ok(mut lock) = last_remote_clip.lock() {
                                             *lock = Some(LocalClipboardContent::Image(hash));
@@ -339,24 +337,13 @@ async fn handle_protocol_session(
                                         let _ = clip.set_image(data);
                                     }
                                     Frame::Clipboard(ClipboardEvent::Files { manifest }) => {
-                                        log_info!(&event_tx, "Clipboard files sync from Client: {} files", manifest.files.len());
-                                        // Server side logic for receiving files from Client
-                                        // Check space
-                                        let free_space = 100 * 1024 * 1024 * 1024; 
-                                        if free_space < manifest.total_size {
-                                            let _ = ws_sink.send(WsMessage::Binary(bincode::serialize(&Frame::Notification {
-                                                title: "Clipboard Sync Failed".to_string(),
-                                                message: "Remote storage full".to_string(),
-                                            })?)).await;
-                                        } 
-                                        // We just wait for FileTransferRequests.
+                                        log_info!(&event_tx, "Clipboard files sync manifest: {} files", manifest.files.len());
+                                        incoming_batches.insert(manifest.batch_id, (manifest.files.len(), Vec::new()));
                                     }
                                     Frame::Notification { title, message } => {
-                                        // Forward to GUI
-                                                                                 let _ = event_tx.send(SessionEvent::Log { level: LogLevel::Info, message: format!("Remote Notification: {} - {}", title, message) }).await;
+                                        let _ = event_tx.send(SessionEvent::Log { level: LogLevel::Info, message: format!("Remote Notification: {} - {}", title, message) }).await;
                                     }
                                     Frame::FileTransferResponse(resp) => {
-                                        log_info!(&event_tx, "File transfer response for ID {}: accepted={}", resp.id, resp.accepted);
                                         if resp.accepted {
                                             let mut path_opt = None;
                                             if let Ok(mut lock) = pending_sends.lock() {
@@ -378,10 +365,10 @@ async fn handle_protocol_session(
                                                                 if broadcast_tx_file.send(Frame::FileData { id: file_id, chunk }).is_err() { break; }
                                                             }
                                                             let _ = broadcast_tx_file.send(Frame::FileEnd { id: file_id });
-                                                            log_info!(&event_tx_file, "Server file sender completed for ID: {}", file_id);
+                                                            log_info!(&event_tx_file, "File sender completed ID: {}", file_id);
                                                         }
                                                         Err(e) => {
-                                                            log_error!(&event_tx_file, "Server failed to open file for sending {:?}: {}", path, e);
+                                                            log_error!(&event_tx_file, "Failed to open file for sending {:?}: {}", path, e);
                                                         }
                                                     }
                                                 });
@@ -393,23 +380,20 @@ async fn handle_protocol_session(
                                     }
                                     Frame::Input(event) => {
                                         match event {
-                                            platform_passer_core::InputEvent::ScreenSwitch(platform_passer_core::ScreenSide::Local) => {
-                                                let _ = source.set_remote(false); // If we were remote, return to local
-                                                // If we are a sink, we'd call reset_input here, but Server 
-                                                // usually isn't a sink. Still adding for safety.
+                                            platform_passer_core::InputEvent::ScreenSwitch(_) => {
+                                                // When Server receives focus, ensure it stays in Local mode (not swallowing)
+                                                let _ = source.set_remote(false);
                                             }
-                                            _ => {
-                                                // Server usually doesn't inject input received from client
-                                            }
+                                            _ => {}
                                         }
                                     }
                                     Frame::FileTransferRequest(req) => {
-                                        log_info!(&event_tx, "File transfer request: {} ({} bytes) purpose={:?}", req.filename, req.file_size, req.purpose);
+                                        log_info!(&event_tx, "File transfer request: {} purpose={:?}", req.filename, req.purpose);
                                         
-                                        let (should_dload, save_dir) = match req.purpose {
-                                            TransferPurpose::Manual => (true, std::path::PathBuf::from("downloads")),
+                                        let (should_dload, save_dir, batch_id_opt) = match req.purpose {
+                                            TransferPurpose::Manual => (true, std::path::PathBuf::from("downloads"), None),
                                             TransferPurpose::ClipboardSync { batch_id } => {
-                                                (true, std::env::temp_dir().join(format!("platform_passer_clip_{}", batch_id)))
+                                                (true, std::env::temp_dir().join(format!("platform_passer_clip_{}", batch_id)), Some(batch_id))
                                             }
                                         };
 
@@ -420,9 +404,11 @@ async fn handle_protocol_session(
                                             match File::create(&file_path).await {
                                                 Ok(file) => {
                                                     active_files.insert(req.id, file);
+                                                    if let Some(bid) = batch_id_opt {
+                                                        active_downloads.insert(req.id, (bid, file_path));
+                                                    }
                                                     let resp = Frame::FileTransferResponse(platform_passer_core::FileTransferResponse { id: req.id, accepted: true });
                                                     let _ = ws_sink.send(WsMessage::Binary(bincode::serialize(&resp)?)).await;
-                                                    log_info!(&event_tx, "Accepted file transfer ID: {}", req.id);
                                                 }
                                                 Err(e) => {
                                                     log_error!(&event_tx, "Failed to create file {:?}: {}", file_path, e);
@@ -434,25 +420,42 @@ async fn handle_protocol_session(
                                     }
                                     Frame::FileData { id, chunk } => {
                                         if let Some(file) = active_files.get_mut(&id) {
-                                            if let Err(e) = file.write_all(&chunk).await {
-                                                log_error!(&event_tx, "Failed to write chunk for file {}: {}", id, e);
-                                                active_files.remove(&id);
-                                            }
+                                            let _ = file.write_all(&chunk).await;
                                         }
                                     }
                                     Frame::FileEnd { id } => {
                                         if let Some(mut file) = active_files.remove(&id) {
                                             let _ = file.flush().await;
-                                            log_info!(&event_tx, "File transfer completed for ID: {}", id);
+                                            
+                                            if let Some((batch_id, path)) = active_downloads.remove(&id) {
+                                                if let Some((remaining, paths)) = incoming_batches.get_mut(&batch_id) {
+                                                    paths.push(path);
+                                                    *remaining -= 1;
+                                                    
+                                                    if *remaining == 0 {
+                                                        log_info!(&event_tx, "Clipboard batch {} complete with {} files.", batch_id, paths.len());
+                                                        let final_paths: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                                                        
+                                                        // Update last_remote_clip to avoid echo
+                                                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                                        use std::hash::Hash; use std::hash::Hasher;
+                                                        final_paths.hash(&mut hasher);
+                                                        if let Ok(mut lock) = last_remote_clip.lock() {
+                                                            *lock = Some(LocalClipboardContent::Files(hasher.finish()));
+                                                        }
+
+                                                        let _ = clip.set_files(final_paths);
+                                                        incoming_batches.remove(&batch_id);
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
-                                    _ => {
-                                        // Silent ignore for other frame types to avoid spam
-                                    }
+                                    _ => {}
                                 }
                             }
                             Err(e) => {
-                                log_error!(&event_tx, "Failed to deserialize frame: {}", e);
+                                log_error!(&event_tx, "Error deserializing frame: {}", e);
                             }
                         }
                     }
@@ -471,29 +474,20 @@ async fn handle_protocol_session(
             result = broadcast_rx.recv() => {
                 match result {
                     Ok(frame) => {
-                        if let Frame::Input(InputEvent::ScreenSwitch(_)) = &frame {
-                            log_info!(&event_tx, "Switching focus: {:?}", frame);
-                        }
                         let bytes = bincode::serialize(&frame)?;
                         if let Err(e) = ws_sink.send(WsMessage::Binary(bytes)).await {
                             log_error!(&event_tx, "Failed to send frame: {}", e);
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        log_warn!(&event_tx, "Broadcast LAGGED by {} messages. Skipping frames.", n);
-                        continue;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        log_error!(&event_tx, "Broadcast channel closed.");
-                        break;
-                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         }
     }
 
-    log_info!(&event_tx, "Session terminated. Resetting focus.");
+    log_info!(&event_tx, "Session terminated.");
     let _ = source.set_remote(false);
     let _ = event_tx.send(SessionEvent::Disconnected).await;
     Ok(())

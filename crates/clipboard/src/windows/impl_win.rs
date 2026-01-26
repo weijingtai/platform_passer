@@ -1,9 +1,8 @@
 use crate::traits::ClipboardProvider;
 use anyhow::{Result, anyhow};
-use std::ffi::c_void;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Mutex, Once};
 use std::thread;
-use windows::core::{PCWSTR, w, HRESULT};
+use windows::core::{PCWSTR, w};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM, HANDLE, HGLOBAL, HINSTANCE, HMODULE, GlobalFree};
 use windows::Win32::System::DataExchange::{
     OpenClipboard, CloseClipboard, EmptyClipboard, SetClipboardData, GetClipboardData,
@@ -19,8 +18,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use arboard::{Clipboard, ImageData};
 use std::borrow::Cow;
 use image::ImageOutputFormat;
+use windows::Win32::UI::Shell::{DragQueryFileW, HDROP, DROPFILES};
 
-const CF_UNICODETEXT: u32 = 13;
+const CF_HDROP: u32 = 15;
 
 static REGISTER_CLASS: Once = Once::new();
 static GLOBAL_CALLBACK: Mutex<Option<Box<dyn Fn() + Send + Sync>>> = Mutex::new(None);
@@ -81,6 +81,91 @@ impl ClipboardProvider for WindowsClipboard {
         };
         clipboard.set_image(image_data).map_err(|e| anyhow!("Set image failed: {}", e))?;
         Ok(())
+    }
+
+    fn get_files(&self) -> Result<Option<Vec<String>>> {
+        unsafe {
+            if OpenClipboard(HWND(0)).is_err() {
+                return Err(anyhow!("Failed to open clipboard"));
+            }
+            let h_data = GetClipboardData(CF_HDROP).unwrap_or(HANDLE(0));
+            if h_data.0 == 0 {
+                let _ = CloseClipboard();
+                return Ok(None);
+            }
+            
+            let h_drop = HDROP(h_data.0);
+            let count = DragQueryFileW(h_drop, 0xFFFFFFFF, None);
+            let mut files = Vec::new();
+            
+            for i in 0..count {
+                let len = DragQueryFileW(h_drop, i, None);
+                let mut buffer = vec![0u16; len as usize + 1];
+                DragQueryFileW(h_drop, i, Some(&mut buffer));
+                // Remove null terminator for String conversion
+                if let Ok(path) = String::from_utf16(&buffer[..len as usize]) {
+                    files.push(path);
+                }
+            }
+            
+            let _ = CloseClipboard();
+            Ok(Some(files))
+        }
+    }
+
+    fn set_files(&self, files: Vec<String>) -> Result<()> {
+        IGNORE_EVENTS.fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            if OpenClipboard(HWND(0)).is_err() {
+                return Err(anyhow!("Failed to open clipboard"));
+            }
+            let _ = EmptyClipboard();
+            
+            let mut total_size = std::mem::size_of::<DROPFILES>();
+            let mut paths_wide = Vec::new();
+            for file in files {
+                let mut wide: Vec<u16> = file.encode_utf16().collect();
+                wide.push(0);
+                total_size += wide.len() * 2;
+                paths_wide.push(wide);
+            }
+            total_size += 2; // Final double null
+            
+            let h_global = GlobalAlloc(GMEM_MOVEABLE, total_size).map_err(|e| anyhow!("GlobalAlloc failed: {}", e))?;
+            let ptr = GlobalLock(h_global);
+            if ptr.is_null() {
+                 let _ = GlobalFree(h_global);
+                 let _ = CloseClipboard();
+                 return Err(anyhow!("GlobalLock failed"));
+            }
+            
+            let dropfiles = DROPFILES {
+                pFiles: std::mem::size_of::<DROPFILES>() as u32,
+                pt: windows::Win32::Foundation::POINT { x: 0, y: 0 },
+                fNC: windows::Win32::Foundation::BOOL(0),
+                fWide: windows::Win32::Foundation::BOOL(1),
+            };
+            
+            std::ptr::copy_nonoverlapping(&dropfiles, ptr as *mut DROPFILES, 1);
+            let mut offset = std::mem::size_of::<DROPFILES>();
+            for wide in paths_wide {
+                std::ptr::copy_nonoverlapping(wide.as_ptr(), (ptr as usize + offset) as *mut u16, wide.len());
+                offset += wide.len() * 2;
+            }
+            // Double null at expiration
+            std::ptr::write_bytes((ptr as usize + offset) as *mut u8, 0, 2);
+            
+            let _ = GlobalUnlock(h_global);
+            
+            if let Err(e) = SetClipboardData(CF_HDROP, HANDLE(h_global.0 as isize)) {
+                let _ = GlobalFree(h_global);
+                let _ = CloseClipboard();
+                return Err(anyhow!("SetClipboardData failed: {}", e));
+            }
+            
+            let _ = CloseClipboard();
+            Ok(())
+        }
     }
 
     fn start_listener(&self, callback: Box<dyn Fn() + Send + Sync>) -> Result<()> {
