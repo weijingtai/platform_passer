@@ -159,6 +159,12 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
         
         *running_clone.lock().unwrap() = false;
         *log_tx_clone.lock().unwrap() = None;
+
+        // Final state reset back to GUI
+        let _ = window.emit("session-event", Payload { 
+            event_type: "Disconnected".to_string(), 
+            message: "Server stopped".to_string() 
+        });
     });
 
     "Server starting...".to_string()
@@ -228,13 +234,41 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
                 tracing::error!("Failed to emit session-event to GUI: {}", e);
             }
         }
+        
         *running_clone.lock().unwrap() = false;
         *tx_clone.lock().unwrap() = None;
         *log_tx_clone.lock().unwrap() = None;
+        
+        // Final state reset back to GUI
+        let _ = window.emit("session-event", Payload { 
+            event_type: "Disconnected".to_string(), 
+            message: "Session terminated".to_string() 
+        });
     });
 
     format!("Connecting to {}:{}...", ip, port)
 }
+
+#[command]
+fn stop_session(state: State<AppState>) -> String {
+    let tx_opt = state.command_tx.lock().unwrap();
+    if let Some(tx) = &*tx_opt {
+        let tx_clone = tx.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = tx_clone.send(SessionCommand::Disconnect).await;
+        });
+        "Disconnecting...".to_string()
+    } else {
+        "No active session".to_string()
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+struct Payload {
+    event_type: String,
+    message: String,
+}
+
 
 #[command]
 fn check_accessibility() -> bool {
@@ -248,11 +282,6 @@ fn check_accessibility() -> bool {
     }
 }
 
-#[derive(serde::Serialize, Clone)]
-struct Payload {
-    event_type: String,
-    message: String,
-}
 
 fn main() {
     let filter = "debug,quinn=debug,rustls=info"; // Force debug for now to help user
@@ -308,7 +337,8 @@ fn main() {
             // Tray setup
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let disconnect_i = MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_i, &disconnect_i, &quit_i])?;
             
             let _tray = TrayIconBuilder::new()
                 .menu(&menu)
@@ -321,6 +351,16 @@ fn main() {
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
+                            }
+                        }
+                        "disconnect" => {
+                            let state: State<AppState> = app.state();
+                            let tx_opt = state.command_tx.lock().unwrap();
+                            if let Some(tx) = &*tx_opt {
+                                let tx_clone = tx.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = tx_clone.send(SessionCommand::Disconnect).await;
+                                });
                             }
                         }
                         _ => {}
@@ -342,7 +382,6 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(target_os = "windows")]
                 {
-                    use tauri::image::Image;
                     // Load the icon from the resource directory or embed it
                     // For simplicity, let's try to load it from the App's resource path if possible, 
                     // or use the default app icon which should be bundled.
@@ -365,7 +404,7 @@ fn main() {
                 api.prevent_close();
             }
         })
-        .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action, check_accessibility, get_config, save_config])
+        .invoke_handler(tauri::generate_handler![start_server, connect_to, stop_session, send_file_action, check_accessibility, get_config, save_config])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
