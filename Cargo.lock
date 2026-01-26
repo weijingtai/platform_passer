@@ -3068,6 +3068,8 @@ name = "platform-passer-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cocoa",
+ "objc",
  "platform-passer-clipboard",
  "platform-passer-core",
  "platform-passer-input",

@@ -1,7 +1,7 @@
 {
   "productName": "platform-passer",
   "version": "0.1.0",
-  "identifier": "com.platform-passer.dev",
+  "identifier": "com.platform-passer.desktop",
   "build": {
     "beforeDevCommand": "",
     "beforeBuildCommand": "",
@@ -16,14 +16,14 @@
         {
           "identifier": "main-capability",
           "description": "Main window capabilities",
-          "windows": ["main"],
+          "windows": [
+            "main"
+          ],
           "permissions": [
             "core:event:allow-listen",
             "core:event:allow-emit",
             "core:webview:allow-internal-toggle-devtools",
-            "notification:allow-is-permission-granted",
-            "notification:allow-request-permission",
-            "notification:allow-show"
+            "notification:default"
           ]
         }
       ]

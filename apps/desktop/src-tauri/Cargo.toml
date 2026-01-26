@@ -24,5 +24,9 @@ tauri-plugin-dialog = "2.0"
 tauri-plugin-notification = "2.0"
 tauri-plugin-shell = "2.0"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.25"
+objc = "0.2"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

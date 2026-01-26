@@ -108,11 +108,11 @@
           Sync Images (High Bandwidth)
         </label>
         <label class="checkbox-container">
-          <input type="checkbox" id="enable-notifications" onchange="updateConfigValue('notifications', this.checked)"
-            checked>
+          <input type="checkbox" id="notifications-enabled" onchange="toggleNotifications(this.checked)" checked>
           <span class="checkmark"></span>
           Enable Notifications
         </label>
+        <button onclick="testNotification()" style="margin-top: 0.5rem;">Test Notification</button>
       </div>
 
       <button onclick="saveCurrentConfig()" style="margin-top: 1rem;">Save Configuration</button>
@@ -177,6 +177,20 @@
       if (key === 'clipboard') currentConfig.clipboard.sync_enabled = value;
       if (key === 'images') currentConfig.clipboard.sync_images = value;
       if (key === 'notifications') currentConfig.notifications_enabled = value;
+    }
+
+    async function testNotification() {
+      try {
+        const result = await window.__TAURI__.core.invoke('test_notification');
+        log("Test notification sent: " + result);
+      } catch (e) {
+        log("Error sending test notification: " + e);
+      }
+    }
+
+    async function toggleNotifications(enabled) {
+      currentConfig.notifications_enabled = enabled;
+      await saveCurrentConfig();
     }
 
     async function saveCurrentConfig() {

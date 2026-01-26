@@ -248,6 +248,67 @@ fn check_accessibility() -> bool {
     }
 }
 
+#[command]
+fn hide_from_dock() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::appkit::NSApplication;
+        use cocoa::appkit::NSApplicationActivationPolicy;
+        use cocoa::base::nil;
+        use objc::{msg_send, sel, sel_impl};
+        
+        unsafe {
+            let app = NSApplication::sharedApplication(nil);
+            let _: () = msg_send![app, setActivationPolicy: NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory];
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(())
+}
+
+#[command]
+fn show_in_dock() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::appkit::NSApplication;
+        use cocoa::appkit::NSApplicationActivationPolicy;
+        use cocoa::base::nil;
+        use objc::{msg_send, sel, sel_impl};
+        
+        unsafe {
+            let app = NSApplication::sharedApplication(nil);
+            let _: () = msg_send![app, setActivationPolicy: NSApplicationActivationPolicy::NSApplicationActivationPolicyRegular];
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(())
+}
+
+#[command]
+fn test_notification(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri_plugin_notification::NotificationExt;
+    
+    // Explicitly request permission again to debug
+    match app.notification().request_permission() {
+        Ok(permission_state) => {
+            if permission_state != tauri_plugin_notification::PermissionState::Granted {
+                return Err(format!("Permission check returned '{:?}'", permission_state));
+            }
+        },
+        Err(e) => return Err(format!("Failed to request permission: {}", e)),
+    }
+
+    match app.notification().builder()
+        .title("Platform Passer Test")
+        .body("This is a test notification")
+        .show() {
+        Ok(_) => Ok("Permission granted & Notification sent call successful".to_string()),
+        Err(e) => Err(format!("Failed to send notification: {}", e)),
+    }
+}
+
 #[derive(serde::Serialize, Clone)]
 struct Payload {
     event_type: String,
@@ -305,13 +366,30 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            // Request notification permission (macOS)
+            #[cfg(target_os = "macos")]
+            {
+                use tauri_plugin_notification::NotificationExt;
+                let _ = app.notification().request_permission();
+            }
+            
             // Tray setup
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let hide_dock_i = MenuItem::with_id(app, "hide_dock", "Hide from Dock", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_i, &hide_dock_i, &quit_i])?;
             
-            let _tray = TrayIconBuilder::new()
-                .menu(&menu)
+            // Get app icon for tray
+            let icon = app.default_window_icon().cloned();
+            
+            let mut tray_builder = TrayIconBuilder::new().menu(&menu);
+            
+            // Add icon if available
+            if let Some(icon) = icon {
+                tray_builder = tray_builder.icon(icon);
+            }
+            
+            let _tray = tray_builder
                 .on_menu_event(|app, event| {
                     match event.id.as_ref() {
                         "quit" => {
@@ -321,6 +399,20 @@ fn main() {
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
+                            }
+                        }
+                        "hide_dock" => {
+                            #[cfg(target_os = "macos")]
+                            {
+                                use cocoa::appkit::NSApplication;
+                                use cocoa::appkit::NSApplicationActivationPolicy;
+                                use cocoa::base::nil;
+                                use objc::{msg_send, sel, sel_impl};
+                                
+                                unsafe {
+                                    let app_ns = NSApplication::sharedApplication(nil);
+                                    let _: () = msg_send![app_ns, setActivationPolicy: NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory];
+                                }
                             }
                         }
                         _ => {}
@@ -340,14 +432,39 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Handle window close - hide instead of quit
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 window.hide().unwrap();
                 api.prevent_close();
+                
+                // On macOS, also hide from Dock when window is closed
+                #[cfg(target_os = "macos")]
+                {
+                    use cocoa::appkit::NSApplication;
+                    use cocoa::appkit::NSApplicationActivationPolicy;
+                    use cocoa::base::nil;
+                    use objc::{msg_send, sel, sel_impl};
+                    
+                    unsafe {
+                        let app = NSApplication::sharedApplication(nil);
+                        let _: () = msg_send![app, setActivationPolicy: NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory];
+                    }
+                }
             }
         })
-        .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action, check_accessibility, get_config, save_config])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .invoke_handler(tauri::generate_handler![start_server, connect_to, send_file_action, check_accessibility, get_config, save_config, hide_from_dock, show_in_dock, test_notification])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Handle app activation (Dock icon click on macOS)
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        });
 }
 
 struct SharedFileWriter {
