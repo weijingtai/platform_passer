@@ -70,6 +70,7 @@ h1 {
   transition: all 0.3s ease;
 }
 
+/* Connected State */
 .status-indicator.connected {
   color: #10b981;
   border-color: rgba(16, 185, 129, 0.3);
@@ -80,37 +81,83 @@ h1 {
   box-shadow: 0 0 8px #10b981;
 }
 
-/* New Status States */
+/* Waiting State */
+.status-indicator.waiting {
+  color: #f1c40f;
+  border-color: rgba(241, 196, 15, 0.3);
+}
+
 .status-indicator.waiting .status-dot {
-  background-color: #f1c40f; /* Yellow */
+  background-color: #f1c40f;
+  /* Yellow */
   box-shadow: 0 0 8px rgba(241, 196, 15, 0.4);
   animation: pulse 2s infinite;
 }
 
+/* Connecting State */
+.status-indicator.connecting {
+  color: #f39c12;
+  border-color: rgba(243, 156, 18, 0.3);
+}
+
 .status-indicator.connecting .status-dot {
-  background-color: #f39c12; /* Orange */
+  background-color: #f39c12;
+  /* Orange */
   animation: pulse 1s infinite;
 }
 
+/* Reconnecting State */
+.status-indicator.reconnecting {
+  color: #e67e22;
+  border-color: rgba(230, 126, 34, 0.3);
+}
+
 .status-indicator.reconnecting .status-dot {
-  background-color: #e67e22; /* Dark Orange */
+  background-color: #e67e22;
+  /* Dark Orange */
   animation: bg-pulse-red 1.5s infinite;
 }
 
+/* Error State */
+.status-indicator.error {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
 .status-indicator.error .status-dot {
-  background-color: #ef4444; /* Red */
+  background-color: #ef4444;
+  /* Red */
 }
 
 @keyframes pulse {
-  0% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(0.95); }
-  100% { opacity: 1; transform: scale(1); }
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.6;
+    transform: scale(0.95);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @keyframes bg-pulse-red {
-  0% { background-color: #e67e22; }
-  50% { background-color: #c0392b; }
-  100% { background-color: #e67e22; }
+  0% {
+    background-color: #e67e22;
+  }
+
+  50% {
+    background-color: #c0392b;
+  }
+
+  100% {
+    background-color: #e67e22;
+  }
 }
 
 .tabs {

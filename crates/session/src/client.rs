@@ -154,9 +154,15 @@ pub async fn run_client_session(
     let _ = event_tx.send(SessionEvent::Connecting(server_addr.to_string())).await;
 
     loop {
-        let connect_fut = connect_ws(server_addr);
+        // Enforce timeout on connection attempt
+        let connect_fut = tokio::time::timeout(Duration::from_secs(5), connect_ws(server_addr));
         let stream_result = tokio::select! {
-            res = connect_fut => res,
+            res = connect_fut => {
+                match res {
+                    Ok(inner) => inner,
+                    Err(_) => Err(anyhow::anyhow!("Connection timed out")),
+                }
+            },
             Some(cmd) = cmd_rx.recv() => {
                 if matches!(cmd, SessionCommand::Disconnect) { return Ok(()); }
                 continue; 
@@ -240,9 +246,9 @@ pub async fn run_client_session(
                                 }
                             }
                         }
-                        msg_opt = ws_stream.next() => {
+                        msg_opt = tokio::time::timeout(Duration::from_secs(15), ws_stream.next()) => {
                             match msg_opt {
-                                Some(Ok(Message::Binary(bytes))) => {
+                                Ok(Some(Ok(Message::Binary(bytes)))) => {
                                     if let Ok(frame) = bincode::deserialize::<Frame>(&bytes) {
                                         match frame {
                                             Frame::Input(event) => {
@@ -342,10 +348,14 @@ pub async fn run_client_session(
                                         }
                                     }
                                 }
-                                Some(Ok(Message::Close(_))) | None => break,
-                                Some(Err(e)) => {
+                                Ok(Some(Ok(Message::Close(_)))) | Ok(None) => break,
+                                Ok(Some(Err(e))) => {
                                     log_error!(&event_tx, "WebSocket Error: {}", e);
-                                    break; 
+                                    break;
+                                }
+                                Err(_) => {
+                                    log_error!(&event_tx, "Server timed out (no heartbeat).");
+                                    break;
                                 }
                                 _ => {}
                             }

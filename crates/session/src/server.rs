@@ -321,9 +321,9 @@ async fn handle_protocol_session(
     loop {
         tokio::select! {
             // Read from client
-            msg = ws_stream.next() => {
+            msg = tokio::time::timeout(std::time::Duration::from_secs(15), ws_stream.next()) => {
                 match msg {
-                    Some(Ok(WsMessage::Binary(bytes))) => {
+                    Ok(Some(Ok(WsMessage::Binary(bytes)))) => {
                         match bincode::deserialize::<Frame>(&bytes) {
                             Ok(frame) => {
                                 match frame {
@@ -465,12 +465,16 @@ async fn handle_protocol_session(
                             }
                         }
                     }
-                    Some(Ok(WsMessage::Close(_))) | None => {
+                    Ok(Some(Ok(WsMessage::Close(_)))) | Ok(None) => {
                         log_info!(&event_tx, "Client closed connection.");
                         break;
                     }
-                    Some(Err(e)) => {
+                    Ok(Some(Err(e))) => {
                         log_error!(&event_tx, "WebSocket read error: {}", e);
+                        break;
+                    }
+                    Err(_) => {
+                        log_warn!(&event_tx, "Client timed out (no heartbeat).");
                         break;
                     }
                     _ => {}
