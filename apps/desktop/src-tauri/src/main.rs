@@ -120,40 +120,55 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
 
         let bind_addr: SocketAddr = format!("{}:{}", ip, port).parse().unwrap_or_else(|_| "0.0.0.0:4433".parse().unwrap());
         
-        let _session_task = tokio::spawn(async move {
+        let mut session_task = tokio::spawn(async move {
             run_server_session(bind_addr, cmd_rx, tx).await
         });
         
         // Event Forwarder Loop
-        while let Some(event) = rx.recv().await {
-            let (event_type, message) = match event {
-                SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
-                SessionEvent::Connected(ref s) => {
-                    eprintln!("DEBUG: Received Connected event in event loop: {}", s);
-                    let enabled = config_clone.lock().unwrap().notifications_enabled;
-                    if enabled {
-                         let _ = app_handle.notification().builder()
-                            .title("Platform Passer")
-                            .body(format!("Connected to {}", s))
-                            .show();
+        loop {
+            tokio::select! {
+                _ = &mut session_task => {
+                    tracing::info!("Server session task finished");
+                    break;
+                }
+                event_opt = rx.recv() => {
+                    match event_opt {
+                        Some(event) => {
+                            let (event_type, message) = match event {
+                                SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
+                                SessionEvent::Connected(ref s) => {
+                                    eprintln!("DEBUG: Received Connected event in event loop: {}", s);
+                                    let enabled = config_clone.lock().unwrap().notifications_enabled;
+                                    if enabled {
+                                         let _ = app_handle.notification().builder()
+                                            .title("Platform Passer")
+                                            .body(format!("Connected to {}", s))
+                                            .show();
+                                    }
+                                    ("Connected".to_string(), format!("Connected to {}", s))
+                                },
+                                SessionEvent::Disconnected => {
+                                    let enabled = config_clone.lock().unwrap().notifications_enabled;
+                                    if enabled {
+                                         let _ = app_handle.notification().builder()
+                                            .title("Platform Passer")
+                                            .body("Disconnected")
+                                            .show();
+                                    }
+                                    ("Disconnected".to_string(), "Disconnected".to_string())
+                                },
+                                SessionEvent::Error(ref s) => ("Error".to_string(), format!("Error: {}", s)),
+                            };
+                
+                            if let Err(e) = window.emit("session-event", Payload { event_type, message }) {
+                                tracing::error!("Failed to emit session-event to GUI: {}", e);
+                            }
+                        }
+                        None => {
+                            break;
+                        }
                     }
-                    ("Connected".to_string(), format!("Connected to {}", s))
-                },
-                SessionEvent::Disconnected => {
-                    let enabled = config_clone.lock().unwrap().notifications_enabled;
-                    if enabled {
-                         let _ = app_handle.notification().builder()
-                            .title("Platform Passer")
-                            .body("Disconnected")
-                            .show();
-                    }
-                    ("Disconnected".to_string(), "Disconnected".to_string())
-                },
-                SessionEvent::Error(ref s) => ("Error".to_string(), format!("Error: {}", s)),
-            };
-
-            if let Err(e) = window.emit("session-event", Payload { event_type, message }) {
-                tracing::error!("Failed to emit session-event to GUI: {}", e);
+                }
             }
         }
         
@@ -199,39 +214,54 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
         let server_addr_str = format!("{}:{}", ip_clone, port);
         let server_addr: SocketAddr = server_addr_str.parse().unwrap_or_else(|_| "127.0.0.1:4433".parse().unwrap());
         
-        let _session_task = tokio::spawn(async move {
+        let mut session_task = tokio::spawn(async move {
             run_client_session(server_addr, None, cmd_rx, tx).await
         });
 
         // Event Forwarder Loop
-        while let Some(event) = rx.recv().await {
-            let (event_type, message) = match event {
-                SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
-                SessionEvent::Connected(ref s) => {
-                    let enabled = config_clone.lock().unwrap().notifications_enabled;
-                    if enabled {
-                         let _ = app_handle.notification().builder()
-                            .title("Platform Passer")
-                            .body(format!("Connected to {}", s))
-                            .show();
+        loop {
+            tokio::select! {
+                _ = &mut session_task => {
+                    tracing::info!("Client session task finished");
+                    break;
+                }
+                event_opt = rx.recv() => {
+                    match event_opt {
+                        Some(event) => {
+                            let (event_type, message) = match event {
+                                SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
+                                SessionEvent::Connected(ref s) => {
+                                    let enabled = config_clone.lock().unwrap().notifications_enabled;
+                                    if enabled {
+                                         let _ = app_handle.notification().builder()
+                                            .title("Platform Passer")
+                                            .body(format!("Connected to {}", s))
+                                            .show();
+                                    }
+                                    ("Connected".to_string(), format!("Connected to {}", s))
+                                },
+                                SessionEvent::Disconnected => {
+                                     let enabled = config_clone.lock().unwrap().notifications_enabled;
+                                    if enabled {
+                                         let _ = app_handle.notification().builder()
+                                            .title("Platform Passer")
+                                            .body("Disconnected")
+                                            .show();
+                                    }
+                                    ("Disconnected".to_string(), "Disconnected".to_string())
+                                },
+                                SessionEvent::Error(ref s) => ("Error".to_string(), format!("Error: {}", s)),
+                            };
+                
+                            if let Err(e) = window.emit("session-event", Payload { event_type, message }) {
+                                tracing::error!("Failed to emit session-event to GUI: {}", e);
+                            }
+                        }
+                        None => {
+                            break;
+                        }
                     }
-                    ("Connected".to_string(), format!("Connected to {}", s))
-                },
-                SessionEvent::Disconnected => {
-                     let enabled = config_clone.lock().unwrap().notifications_enabled;
-                    if enabled {
-                         let _ = app_handle.notification().builder()
-                            .title("Platform Passer")
-                            .body("Disconnected")
-                            .show();
-                    }
-                    ("Disconnected".to_string(), "Disconnected".to_string())
-                },
-                SessionEvent::Error(ref s) => ("Error".to_string(), format!("Error: {}", s)),
-            };
-
-            if let Err(e) = window.emit("session-event", Payload { event_type, message }) {
-                tracing::error!("Failed to emit session-event to GUI: {}", e);
+                }
             }
         }
         
