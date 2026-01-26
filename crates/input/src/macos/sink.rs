@@ -206,3 +206,19 @@ impl InputSink for MacosInputSink {
     }
 }
 
+
+pub fn force_release_modifiers() {
+    use core_graphics::event::{CGEvent, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+    
+    if let Ok(source) = CGEventSource::new(CGEventSourceStateID::Private) {
+        // macOS Modifier Keycodes:
+        // Command: 55, 54 | Shift: 56, 60 | Option: 58, 61 | Control: 59, 62
+        let mod_keys = [55, 54, 56, 60, 58, 61, 59, 62];
+        for key in mod_keys {
+            if let Ok(event) = CGEvent::new_keyboard_event(source.clone(), key, false) {
+                event.post(CGEventTapLocation::HID);
+            }
+        }
+    }
+}

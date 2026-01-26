@@ -49,40 +49,9 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
     let internal_tx_clip = internal_tx.clone();
     if let Err(e) = clipboard.start_listener(Box::new(move || {
         let clip = DefaultClipboard::new();
-        
-        // Priority 1: Text
-        if let Ok(text) = clip.get_text() {
-            if !text.is_empty() {
-                let should_send = if let Ok(lock) = last_remote_clip_listener.lock() {
-                    match &*lock {
-                        Some(LocalClipboardContent::Text(last)) => *last != text,
-                        _ => true,
-                    }
-                } else { true };
 
-                if should_send {
-                     let _ = clip_tx.send(Frame::Clipboard(ClipboardEvent::Text(text)));
-                }
-                return;
-            }
-        }
-        
-        // Priority 2: Image
-        if let Ok(Some(img_data)) = clip.get_image() {
-            let img_hash = calculate_hash(&img_data);
-             let should_send = if let Ok(lock) = last_remote_clip_listener.lock() {
-                match &*lock {
-                    Some(LocalClipboardContent::Image(last_hash)) => *last_hash != img_hash,
-                    _ => true,
-                }
-            } else { true };
-            
-            if should_send {
-                 let _ = clip_tx.send(Frame::Clipboard(ClipboardEvent::Image { data: img_data }));
-            }
-        }
-
-        // Priority 3: Files (macOS/Windows)
+        // Priority 1: Files (macOS/Windows)
+        // Check for files first because macOS Finder puts both file URL and text (filename) on clipboard.
         if let Ok(Some(files)) = clip.get_files() {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             use std::hash::Hash; use std::hash::Hasher;
@@ -135,8 +104,43 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
                           });
                       }
                   }
+                  return; // Stop if files were found and processed
+             } else {
+                 return; // Even if same hash, we prevent falling through to text
              }
          }
+        
+        // Priority 2: Text
+        if let Ok(text) = clip.get_text() {
+            if !text.is_empty() {
+                let should_send = if let Ok(lock) = last_remote_clip_listener.lock() {
+                    match &*lock {
+                        Some(LocalClipboardContent::Text(last)) => *last != text,
+                        _ => true,
+                    }
+                } else { true };
+
+                if should_send {
+                     let _ = clip_tx.send(Frame::Clipboard(ClipboardEvent::Text(text)));
+                }
+                return;
+            }
+        }
+        
+        // Priority 3: Image
+        if let Ok(Some(img_data)) = clip.get_image() {
+            let img_hash = calculate_hash(&img_data);
+            let should_send = if let Ok(lock) = last_remote_clip_listener.lock() {
+                match &*lock {
+                    Some(LocalClipboardContent::Image(last_hash)) => *last_hash != img_hash,
+                    _ => true,
+                }
+            } else { true };
+            
+            if should_send {
+                 let _ = clip_tx.send(Frame::Clipboard(ClipboardEvent::Image { data: img_data }));
+            }
+        }
      })) {
         log_error!(&event_tx, "Failed to start clipboard listener: {}", e);
     }

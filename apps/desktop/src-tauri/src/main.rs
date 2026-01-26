@@ -380,7 +380,7 @@ fn main() {
     // Safety Net: Handle Ctrl+C to unhook and clear modifiers
     let _ = ctrlc::set_handler(move || {
         eprintln!("Received Ctrl+C! Cleaning up...");
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
             // Reset modifiers to prevent "sticky key" disaster
             platform_passer_input::force_release_modifiers();
