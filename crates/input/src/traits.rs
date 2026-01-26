@@ -8,6 +8,7 @@ pub trait InputSource: Send + Sync {
     fn start_capture(&self, callback: Box<dyn Fn(InputEvent) + Send + Sync>) -> Result<()>;
     fn stop_capture(&self) -> Result<()>;
     fn set_remote(&self, remote: bool) -> Result<()>;
+    fn add_remote(&self, _screen: platform_passer_core::config::RemoteScreen) -> Result<()> { Ok(()) }
     fn update_config(&self, _config: AppConfig) -> Result<()> { Ok(()) }
 }
 

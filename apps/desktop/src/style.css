@@ -72,60 +72,80 @@ h1 {
 
 /* Connected State */
 .status-indicator.connected {
-  color: #10b981;
-  border-color: rgba(16, 185, 129, 0.3);
+  color: #10b981 !important;
+  border-color: rgba(16, 185, 129, 0.3) !important;
+}
+
+.status-indicator.connected #status-text {
+  color: #10b981 !important;
 }
 
 .status-indicator.connected .status-dot {
-  background-color: #10b981;
-  box-shadow: 0 0 8px #10b981;
+  background-color: #10b981 !important;
+  box-shadow: 0 0 8px #10b981 !important;
 }
 
 /* Waiting State */
 .status-indicator.waiting {
-  color: #f1c40f;
-  border-color: rgba(241, 196, 15, 0.3);
+  color: #f1c40f !important;
+  border-color: rgba(241, 196, 15, 0.3) !important;
+}
+
+.status-indicator.waiting #status-text {
+  color: #f1c40f !important;
 }
 
 .status-indicator.waiting .status-dot {
-  background-color: #f1c40f;
+  background-color: #f1c40f !important;
   /* Yellow */
-  box-shadow: 0 0 8px rgba(241, 196, 15, 0.4);
+  box-shadow: 0 0 8px rgba(241, 196, 15, 0.4) !important;
   animation: pulse 2s infinite;
 }
 
 /* Connecting State */
 .status-indicator.connecting {
-  color: #f39c12;
-  border-color: rgba(243, 156, 18, 0.3);
+  color: #f39c12 !important;
+  border-color: rgba(243, 156, 18, 0.3) !important;
+}
+
+.status-indicator.connecting #status-text {
+  color: #f39c12 !important;
 }
 
 .status-indicator.connecting .status-dot {
-  background-color: #f39c12;
+  background-color: #f39c12 !important;
   /* Orange */
   animation: pulse 1s infinite;
 }
 
 /* Reconnecting State */
 .status-indicator.reconnecting {
-  color: #e67e22;
-  border-color: rgba(230, 126, 34, 0.3);
+  color: #e67e22 !important;
+  border-color: rgba(230, 126, 34, 0.3) !important;
+}
+
+.status-indicator.reconnecting #status-text {
+  color: #e67e22 !important;
 }
 
 .status-indicator.reconnecting .status-dot {
-  background-color: #e67e22;
+  background-color: #e67e22 !important;
   /* Dark Orange */
   animation: bg-pulse-red 1.5s infinite;
 }
 
 /* Error State */
 .status-indicator.error {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.3);
+  color: #ef4444 !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+}
+
+.status-indicator.error #status-text {
+  color: #ef4444 !important;
 }
 
 .status-indicator.error .status-dot {
-  background-color: #ef4444;
+  background-color: #ef4444 !important;
   /* Red */
 }
 

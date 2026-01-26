@@ -161,12 +161,22 @@
       const servBtn = document.getElementById('server-btn');
       if (!statusIndicator || !statusText) return;
 
-      // Reset classes
-      statusIndicator.classList.remove('connected', 'waiting', 'connecting', 'reconnecting', 'error');
+      // Debug logging
+      console.log('updateStatus called with type:', type, 'message:', message);
+      console.log('statusIndicator before:', statusIndicator.className);
+
+      // Only reset classes for actual status changes, not for Log events
+      if (type !== 'Log') {
+        statusIndicator.classList.remove('connected', 'waiting', 'connecting', 'reconnecting', 'error');
+      }
 
       if (type === 'Connected') {
         statusIndicator.classList.add('connected');
         statusText.innerText = 'Connected';
+
+        // Debug: verify class was added
+        console.log('statusIndicator after adding connected:', statusIndicator.className);
+        console.log('Computed color:', window.getComputedStyle(statusText).color);
 
         if (connBtn) {
           connBtn.innerText = 'Disconnect';

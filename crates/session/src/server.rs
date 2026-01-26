@@ -297,6 +297,19 @@ async fn handle_protocol_session(
         match frame {
             Frame::Handshake(h) => {
                 log_info!(&event_tx, "Received handshake (Client: {})", h.client_id);
+                // Update Source with remote topology
+                if let Some(info) = h.screen_info {
+                     // Assume Client is to the RIGHT for now (default behavior) or use config
+                     // Since we don't have a complex topology manager here, we default to adding it to the Right
+                     let _ = source.add_remote(
+                         platform_passer_core::config::RemoteScreen {
+                            id: h.client_id,
+                            position: platform_passer_core::config::ScreenPosition::Right, // Default
+                            info: info.clone(),
+                         }
+                     );
+                     log_info!(&event_tx, "Registered remote screen: {}x{}", info.width, info.height);
+                }
                 let resp = Frame::Handshake(Handshake {
                     version: 1,
                     client_id: format!("{}-server", std::env::consts::OS),
