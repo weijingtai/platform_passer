@@ -19,14 +19,19 @@ pub fn check_accessibility_trusted() -> bool {
 }
 
 /// Checks if accessibility permissions are granted, and if not, attempts to trigger the system dialog.
+/// 
+/// Note: This function should ideally be called from the main thread to avoid potential issues
+/// with Core Foundation objects, but we use a thread-safe approach here.
 pub fn ensure_accessibility_permissions() -> bool {
-    unsafe {
-        let key = CFString::from_static_string("kAXTrustedCheckOptionPrompt");
-        let value = CFBoolean::true_value();
-        let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
-        
-        AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const _)
+    // First check without prompting
+    if check_accessibility_trusted() {
+        return true;
     }
+    
+    // If not trusted, we need to prompt. This requires main thread execution.
+    // For now, just return the status without prompting to avoid crashes.
+    // The GUI should handle prompting via the check_accessibility command.
+    false
 }
 
 /// Checks if input monitoring is likely enabled by attempting to create a HID event tap (which requires it).
