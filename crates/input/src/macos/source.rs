@@ -89,6 +89,13 @@ impl MacosInputSource {
     }
 }
 
+impl Drop for MacosInputSource {
+    fn drop(&mut self) {
+        let _ = self.stop_capture();
+    }
+}
+
+
 
 // Optimization: Refresh display bounds only when needed, not on every mouse tick.
 fn get_display_bounds() -> (f32, f32) {
