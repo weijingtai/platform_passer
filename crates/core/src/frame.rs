@@ -11,6 +11,7 @@ pub enum Frame {
     FileData { id: u32, chunk: Vec<u8> },
     FileEnd { id: u32 },
     ScreenSwitch(ScreenSide),
+    Notification { title: String, message: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
@@ -24,6 +25,13 @@ pub struct FileTransferRequest {
     pub id: u32,
     pub filename: String,
     pub file_size: u64,
+    pub purpose: TransferPurpose,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum TransferPurpose {
+    Manual,
+    ClipboardSync { batch_id: u64 },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -36,6 +44,20 @@ pub struct FileTransferResponse {
 pub enum ClipboardEvent {
     Text(String),
     Image { data: Vec<u8> }, // PNG encoded
+    Files { manifest: FileManifest },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileManifest {
+    pub files: Vec<FileMeta>,
+    pub total_size: u64,
+    pub batch_id: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileMeta {
+    pub name: String,
+    pub size: u64,
 }
 
 use crate::config::ScreenInfo;

@@ -9,6 +9,18 @@ use anyhow::anyhow;
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSString, NSAutoreleasePool};
 use objc::{msg_send, sel, sel_impl};
+use std::ffi::CStr;
+
+pub fn nsstring_to_string(ns_string: id) -> String {
+    unsafe {
+        let utf8: *const i8 = msg_send![ns_string, UTF8String];
+        if utf8.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(utf8).to_string_lossy().into_owned()
+        }
+    }
+}
 
 pub struct MacosClipboard;
 
@@ -61,6 +73,83 @@ impl ClipboardProvider for MacosClipboard {
         };
         clipboard.set_image(image_data).map_err(|e| anyhow!("Set image failed: {}", e))?;
         Ok(())
+    }
+
+    fn get_files(&self) -> Result<Option<Vec<String>>> {
+        unsafe {
+            let _pool = NSAutoreleasePool::new(nil);
+            let ns_pasteboard: id = msg_send![objc::class!(NSPasteboard), generalPasteboard];
+            
+            // Define classes: [NSURL class]
+            let ns_url_class: id = msg_send![objc::class!(NSURL), class];
+            let classes: id = msg_send![objc::class!(NSArray), arrayWithObject:ns_url_class];
+            
+            // Define options: Empty dict
+            let options: id = msg_send![objc::class!(NSDictionary), dictionary];
+            
+            let urls: id = msg_send![ns_pasteboard, readObjectsForClasses:classes options:options];
+            
+            if urls == nil {
+                return Ok(None);
+            }
+            
+            let count: u64 = msg_send![urls, count];
+            if count == 0 {
+                return Ok(None);
+            }
+            
+            let mut file_paths = Vec::new();
+            for i in 0..count {
+                let url: id = msg_send![urls, objectAtIndex:i];
+                // Check if file URL: [url isFileURL]
+                let is_file: bool = msg_send![url, isFileURL];
+                if is_file {
+                    let path: id = msg_send![url, path]; // NSString
+                    let path_str = nsstring_to_string(path);
+                    if !path_str.is_empty() {
+                         file_paths.push(path_str);
+                    }
+                }
+            }
+            
+            if file_paths.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(file_paths))
+            }
+        }
+    }
+
+    fn set_files(&self, files: Vec<String>) -> Result<()> {
+        unsafe {
+            let _pool = NSAutoreleasePool::new(nil);
+            let ns_pasteboard: id = msg_send![objc::class!(NSPasteboard), generalPasteboard];
+            
+            // [pasteboard clearContents]
+            let _: isize = msg_send![ns_pasteboard, clearContents];
+            
+            // Create array of NSURLs
+            // let ns_files: id = NSMutableArray::arrayWithCapacity(nil, files.len() as u64);
+            let ns_files: id = msg_send![objc::class!(NSMutableArray), arrayWithCapacity:files.len()];
+            
+            for file_path in files {
+                let ns_path = NSString::alloc(nil).init_str(&file_path);
+                // [NSURL fileURLWithPath:path]
+                let url: id = msg_send![objc::class!(NSURL), fileURLWithPath:ns_path];
+                let _: () = msg_send![ns_files, addObject:url];
+                // Release temporary NSString? It's autoreleased usually but better safe if looped.
+                // Assuming standard autorelease pool.
+            }
+            
+            // [pasteboard writeObjects:files]
+            let success: bool = msg_send![ns_pasteboard, writeObjects:ns_files];
+             
+            if success {
+                Ok(())
+            } else {
+                Err(anyhow!("Failed to write files to pasteboard"))
+            }
+        }
     }
 
     fn start_listener(&self, callback: Box<dyn Fn() + Send + Sync>) -> Result<()> {
