@@ -89,6 +89,8 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
     let pending_sends_clone = pending_sends.clone();
     let mut file_id_counter = 0u32;
     let source_cmd = source.clone();
+    
+    let mut session_tasks = Vec::new();
 
     loop {
         tokio::select! {
@@ -141,7 +143,7 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
                         let pending_sends_session = pending_sends.clone();
                         let source_clone = source.clone();
                 
-                        tokio::spawn(async move {
+                        let handle = tokio::spawn(async move {
                             match accept_async(stream).await {
                                 Ok(ws_stream) => {
                                     log_info!(&log_tx_spawn, "WebSocket handshake successful with {}", addr);
@@ -161,6 +163,7 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
                                 }
                             }
                         });
+                        session_tasks.push(handle);
                     }
                     Err(e) => {
                          log_error!(&event_tx, "Listener accept error: {}", e);
@@ -168,6 +171,11 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
                 }
             }
         }
+    }
+    
+    // Abort all active sessions
+    for task in session_tasks {
+        task.abort();
     }
     
     Ok(())
