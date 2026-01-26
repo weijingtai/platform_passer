@@ -80,6 +80,39 @@ h1 {
   box-shadow: 0 0 8px #10b981;
 }
 
+/* New Status States */
+.status-indicator.waiting .status-dot {
+  background-color: #f1c40f; /* Yellow */
+  box-shadow: 0 0 8px rgba(241, 196, 15, 0.4);
+  animation: pulse 2s infinite;
+}
+
+.status-indicator.connecting .status-dot {
+  background-color: #f39c12; /* Orange */
+  animation: pulse 1s infinite;
+}
+
+.status-indicator.reconnecting .status-dot {
+  background-color: #e67e22; /* Dark Orange */
+  animation: bg-pulse-red 1.5s infinite;
+}
+
+.status-indicator.error .status-dot {
+  background-color: #ef4444; /* Red */
+}
+
+@keyframes pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.95); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes bg-pulse-red {
+  0% { background-color: #e67e22; }
+  50% { background-color: #c0392b; }
+  100% { background-color: #e67e22; }
+}
+
 .tabs {
   display: flex;
   background: var(--bg-color);

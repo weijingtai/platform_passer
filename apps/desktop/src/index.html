@@ -161,6 +161,9 @@
       const servBtn = document.getElementById('server-btn');
       if (!statusIndicator || !statusText) return;
 
+      // Reset classes
+      statusIndicator.classList.remove('connected', 'waiting', 'connecting', 'reconnecting', 'error');
+
       if (type === 'Connected') {
         statusIndicator.classList.add('connected');
         statusText.innerText = 'Connected';
@@ -169,25 +172,58 @@
           connBtn.innerText = 'Disconnect';
           connBtn.classList.add('disconnect');
           connBtn.onclick = stopSession;
+          connBtn.disabled = false;
         }
         if (servBtn) {
           servBtn.innerText = 'Stop Server';
           servBtn.classList.add('disconnect');
           servBtn.onclick = stopSession;
+          servBtn.disabled = false;
+        }
+      } else if (type === 'Waiting') {
+        statusIndicator.classList.add('waiting');
+        statusText.innerText = 'Waiting...';
+
+        if (servBtn) {
+          servBtn.innerText = 'Stop Server';
+          servBtn.classList.add('disconnect');
+          servBtn.onclick = stopSession;
+          servBtn.disabled = false;
+        }
+      } else if (type === 'Connecting') {
+        statusIndicator.classList.add('connecting');
+        statusText.innerText = 'Connecting...';
+
+        if (connBtn) {
+          connBtn.innerText = 'Connecting...';
+          connBtn.onclick = stopSession; // Allow cancelling
+          connBtn.disabled = false;
+        }
+      } else if (type === 'Reconnecting') {
+        statusIndicator.classList.add('reconnecting');
+        statusText.innerText = 'Reconnecting...';
+
+        if (connBtn) {
+          connBtn.innerText = 'Stop Reconnecting';
+          connBtn.classList.add('disconnect');
+          connBtn.onclick = stopSession;
+          connBtn.disabled = false;
         }
       } else if (type === 'Disconnected' || type === 'Error') {
-        statusIndicator.classList.remove('connected');
         statusText.innerText = 'Disconnected';
+        if (type === 'Error') statusIndicator.classList.add('error');
 
         if (connBtn) {
           connBtn.innerText = 'Connect to Server';
           connBtn.classList.remove('disconnect');
           connBtn.onclick = connect;
+          connBtn.disabled = false;
         }
         if (servBtn) {
           servBtn.innerText = 'Start Server';
           servBtn.classList.remove('disconnect');
           servBtn.onclick = startServer;
+          servBtn.disabled = false;
         }
       }
     }
@@ -405,6 +441,21 @@
           await loadConfig();
           const tab = currentConfig.last_mode || 'client';
           await switchTab(tab);
+
+          // Auto-start logic
+          if (tab === 'server') {
+            // If we were server, start immediately
+            log("Auto-starting Server...");
+            startServer();
+          } else if (tab === 'client') {
+            // If we were client, check IP
+            const ip = currentConfig.last_server_ip;
+            if (ip && ip !== "127.0.0.1" && ip !== "0.0.0.0" && ip !== "localhost") {
+              log("Auto-connecting to remote server: " + ip);
+              connect();
+            }
+          }
+
           log("System: Ready.");
         } catch (e) {
           log("Startup Error: " + e);

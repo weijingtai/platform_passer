@@ -150,6 +150,9 @@ pub async fn run_client_session(
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(30);
 
+    // Initial Connecting state
+    let _ = event_tx.send(SessionEvent::Connecting(server_addr.to_string())).await;
+
     loop {
         let connect_fut = connect_ws(server_addr);
         let stream_result = tokio::select! {
@@ -167,7 +170,7 @@ pub async fn run_client_session(
 
                 let (mut ws_sink, mut ws_stream) = ws_stream.split();
                 let clip = DefaultClipboard::new();
-
+                
                 // Handshake
                 let screen_info = {
                     #[cfg(target_os = "macos")] { platform_passer_input::get_screen_info() }
@@ -379,9 +382,14 @@ pub async fn run_client_session(
                 let _ = source.set_remote(false);
                 let _ = sink.reset_input();
                 let _ = hb_stop_tx.send(()).await;
-                let _ = event_tx.send(SessionEvent::Disconnected).await;
+                // Don't send Disconnected here, we will Reconnect
+                // let _ = event_tx.send(SessionEvent::Disconnected).await;
             }
-            Err(_) => { tokio::time::sleep(backoff).await; backoff = std::cmp::min(backoff * 2, max_backoff); }
+            Err(_) => { 
+                let _ = event_tx.send(SessionEvent::Reconnecting(server_addr.to_string())).await;
+                tokio::time::sleep(backoff).await; 
+                backoff = std::cmp::min(backoff * 2, max_backoff); 
+            }
         }
     }
 }

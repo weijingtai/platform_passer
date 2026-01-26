@@ -136,8 +136,10 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
                         Some(event) => {
                             let (event_type, message) = match event {
                                 SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
+                                SessionEvent::Waiting(ref s) => ("Waiting".to_string(), format!("Waiting on {}", s)),
+                                SessionEvent::Connecting(ref s) => ("Connecting".to_string(), format!("Connecting to {}", s)),
+                                SessionEvent::Reconnecting(ref s) => ("Reconnecting".to_string(), format!("Reconnecting to {}", s)),
                                 SessionEvent::Connected(ref s) => {
-                                    eprintln!("DEBUG: Received Connected event in event loop: {}", s);
                                     let enabled = config_clone.lock().unwrap().notifications_enabled;
                                     if enabled {
                                          let _ = app_handle.notification().builder()
@@ -148,7 +150,7 @@ fn start_server(ip: String, port: u16, window: WebviewWindow, state: State<AppSt
                                     ("Connected".to_string(), format!("Connected to {}", s))
                                 },
                                 SessionEvent::Disconnected => {
-                                    let enabled = config_clone.lock().unwrap().notifications_enabled;
+                                     let enabled = config_clone.lock().unwrap().notifications_enabled;
                                     if enabled {
                                          let _ = app_handle.notification().builder()
                                             .title("Platform Passer")
@@ -230,6 +232,9 @@ fn connect_to(ip: String, port: u16, window: WebviewWindow, state: State<AppStat
                         Some(event) => {
                             let (event_type, message) = match event {
                                 SessionEvent::Log { level, message } => ("Log".to_string(), format!("[{:?}] {}", level, message)),
+                                SessionEvent::Waiting(ref s) => ("Waiting".to_string(), format!("Waiting on {}", s)),
+                                SessionEvent::Connecting(ref s) => ("Connecting".to_string(), format!("Connecting to {}", s)),
+                                SessionEvent::Reconnecting(ref s) => ("Reconnecting".to_string(), format!("Reconnecting to {}", s)),
                                 SessionEvent::Connected(ref s) => {
                                     let enabled = config_clone.lock().unwrap().notifications_enabled;
                                     if enabled {
@@ -437,6 +442,9 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = app.get_webview_window("main").expect("no main window").set_focus();
+        }))
         .setup(|app| {
             // Request notification permission (macOS)
             #[cfg(target_os = "macos")]

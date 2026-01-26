@@ -148,6 +148,7 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
     // 4. Setup WebSocket Listener
     let listener = make_ws_listener(bind_addr).await?;
     log_info!(&event_tx, "WebSocket Server listening on {}", bind_addr);
+    let _ = event_tx.send(SessionEvent::Waiting(bind_addr.to_string())).await;
 
     // 5. Main Server Loop (Commands + Accept)
     let cmd_broadcast_tx = broadcast_tx.clone();
@@ -242,6 +243,7 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
                             match accept_async(stream).await {
                                 Ok(ws_stream) => {
                                     log_info!(&log_tx_spawn, "WebSocket handshake successful with {}", addr);
+                                    let _ = log_tx_spawn.send(SessionEvent::Connecting(addr.to_string())).await;
                                     
                                     if let Err(e) = ws_stream.get_ref().set_nodelay(true) {
                                         log_warn!(&log_tx_spawn, "Failed to set TCP_NODELAY on server: {}", e);
