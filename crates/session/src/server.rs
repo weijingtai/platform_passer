@@ -78,86 +78,96 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
         log_error!(&event_tx, "Failed to start clipboard listener: {}", e);
     }
 
-    // 4. Command Listener
+    // 4. Setup WebSocket Listener
+    let listener = make_ws_listener(bind_addr).await?;
+    log_info!(&event_tx, "WebSocket Server listening on {}", bind_addr);
+
+    // 5. Main Server Loop (Commands + Accept)
     let cmd_broadcast_tx = broadcast_tx.clone();
     let cmd_event_tx = event_tx.clone();
-    let _cmd_last_clip = last_remote_clip.clone();
-    
-    // Track pending sends for the server side too
     let pending_sends: Arc<Mutex<HashMap<u32, PathBuf>>> = Arc::new(Mutex::new(HashMap::new()));
     let pending_sends_clone = pending_sends.clone();
     let mut file_id_counter = 0u32;
-
     let source_cmd = source.clone();
-    tokio::spawn(async move {
-        while let Some(cmd) = cmd_rx.recv().await {
-            match cmd {
-                SessionCommand::SendFile(path) => {
-                    if path.exists() {
-                        file_id_counter += 1;
-                        let id = file_id_counter;
-                        let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                        let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
-                        
-                        if let Ok(mut lock) = pending_sends_clone.lock() {
-                            lock.insert(id, path);
+
+    loop {
+        tokio::select! {
+             // Handle Session Commands
+            cmd_opt = cmd_rx.recv() => {
+                match cmd_opt {
+                    Some(SessionCommand::SendFile(path)) => {
+                        if path.exists() {
+                            file_id_counter += 1;
+                            let id = file_id_counter;
+                            let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                            let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                            
+                            if let Ok(mut lock) = pending_sends_clone.lock() {
+                                lock.insert(id, path);
+                            }
+                            
+                            let req = Frame::FileTransferRequest(platform_passer_core::FileTransferRequest {
+                                id,
+                                filename,
+                                file_size,
+                            });
+                            let _ = cmd_broadcast_tx.send(req);
                         }
-                        
-                        let req = Frame::FileTransferRequest(platform_passer_core::FileTransferRequest {
-                            id,
-                            filename,
-                            file_size,
+                    }
+                    Some(SessionCommand::UpdateConfig(config)) => {
+                        // Update source config (Server as sender)
+                        if let Err(e) = source_cmd.update_config(config) {
+                            log_error!(&cmd_event_tx, "Failed to update server source config: {}", e);
+                        }
+                    }
+                    Some(SessionCommand::Disconnect) => {
+                        log_info!(&cmd_event_tx, "Server disconnect command received. Shutting down.");
+                        break;
+                    }
+                    None => {
+                        log_info!(&cmd_event_tx, "Command channel closed. Shutting down server.");
+                        break;
+                    }
+                }
+            }
+            // Handle New Connections
+            accept_res = listener.accept() => {
+                match accept_res {
+                    Ok((stream, addr)) => {
+                         let log_tx_spawn = event_tx.clone();
+                        let broadcast_rx = broadcast_tx.subscribe();
+                        let broadcast_tx_session = broadcast_tx.clone();
+                        let last_remote_clip_conn = last_remote_clip.clone();
+                        let pending_sends_session = pending_sends.clone();
+                        let source_clone = source.clone();
+                
+                        tokio::spawn(async move {
+                            match accept_async(stream).await {
+                                Ok(ws_stream) => {
+                                    log_info!(&log_tx_spawn, "WebSocket handshake successful with {}", addr);
+                                    
+                                    if let Err(e) = ws_stream.get_ref().set_nodelay(true) {
+                                        log_warn!(&log_tx_spawn, "Failed to set TCP_NODELAY on server: {}", e);
+                                    }
+                
+                                    let _ = log_tx_spawn.send(SessionEvent::Connected(addr.to_string())).await;
+                                    
+                                    if let Err(e) = handle_protocol_session(ws_stream, broadcast_rx, log_tx_spawn.clone(), source_clone, last_remote_clip_conn, pending_sends_session, broadcast_tx_session).await {
+                                        log_error!(&log_tx_spawn, "Protocol error with {}: {}", addr, e);
+                                    }
+                                }
+                                Err(e) => {
+                                    log_error!(&log_tx_spawn, "WebSocket handshake failed with {}: {}", addr, e);
+                                }
+                            }
                         });
-                        let _ = cmd_broadcast_tx.send(req);
                     }
-                }
-                SessionCommand::UpdateConfig(config) => {
-                    // Update source config (Server as sender)
-                    if let Err(e) = source_cmd.update_config(config) {
-                        log_error!(&cmd_event_tx, "Failed to update server source config: {}", e);
+                    Err(e) => {
+                         log_error!(&event_tx, "Listener accept error: {}", e);
                     }
-                }
-                SessionCommand::Disconnect => {
-                    // How to stop server? Maybe just exit loop.
-                    log_warn!(&cmd_event_tx, "Server disconnect command not fully implemented (requires listener shutdown)");
                 }
             }
         }
-    });
-
-    // 5. Setup WebSocket Listener
-    let listener = make_ws_listener(bind_addr).await?;
-    log_info!(&event_tx, "WebSocket Server listening on {}", bind_addr);
-    
-    // 3. Accept Loop
-    while let Ok((stream, addr)) = listener.accept().await {
-        let log_tx_spawn = event_tx.clone();
-        let broadcast_rx = broadcast_tx.subscribe();
-        let broadcast_tx_session = broadcast_tx.clone();
-        let last_remote_clip_conn = last_remote_clip.clone();
-        let pending_sends_session = pending_sends.clone();
-        let source_clone = source.clone();
-
-        tokio::spawn(async move {
-            match accept_async(stream).await {
-                Ok(ws_stream) => {
-                    log_info!(&log_tx_spawn, "WebSocket handshake successful with {}", addr);
-                    
-                    if let Err(e) = ws_stream.get_ref().set_nodelay(true) {
-                        log_warn!(&log_tx_spawn, "Failed to set TCP_NODELAY on server: {}", e);
-                    }
-
-                    let _ = log_tx_spawn.send(SessionEvent::Connected(addr.to_string())).await;
-                    
-                    if let Err(e) = handle_protocol_session(ws_stream, broadcast_rx, log_tx_spawn.clone(), source_clone, last_remote_clip_conn, pending_sends_session, broadcast_tx_session).await {
-                        log_error!(&log_tx_spawn, "Protocol error with {}: {}", addr, e);
-                    }
-                }
-                Err(e) => {
-                    log_error!(&log_tx_spawn, "WebSocket handshake failed with {}: {}", addr, e);
-                }
-            }
-        });
     }
     
     Ok(())
