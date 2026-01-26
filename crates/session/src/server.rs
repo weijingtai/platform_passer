@@ -127,12 +127,12 @@ pub async fn run_server_session(bind_addr: SocketAddr, mut cmd_rx: Receiver<Sess
                              total_size,
                              batch_id,
                          };
-                         let _ = clip_tx.send(Frame::Clipboard(ClipboardEvent::Files { manifest }));
-                         
-                         let _ = internal_tx_clip.blocking_send(SessionInternalMsg::SendClipboardFiles { 
-                             batch_id, 
-                             files: files.iter().map(PathBuf::from).collect() 
-                         });
+                          let _ = clip_tx.send(Frame::Clipboard(ClipboardEvent::Files { manifest }));
+                          
+                          let _ = internal_tx_clip.try_send(SessionInternalMsg::SendClipboardFiles { 
+                              batch_id, 
+                              files: files.iter().map(PathBuf::from).collect() 
+                          });
                       }
                   }
              }
@@ -293,7 +293,7 @@ async fn handle_protocol_session(
                 log_info!(&event_tx, "Received handshake (Client: {})", h.client_id);
                 let resp = Frame::Handshake(Handshake {
                     version: 1,
-                    client_id: "macos-server".to_string(), // TODO: Make dynamic
+                    client_id: format!("{}-server", std::env::consts::OS),
                     capabilities: vec!["input".to_string(), "clipboard".to_string()],
                     screen_info: None,
                 });

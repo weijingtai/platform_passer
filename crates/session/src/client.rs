@@ -31,7 +31,7 @@ pub async fn run_client_session(
     event_tx: Sender<SessionEvent>
 ) -> Result<()> {
     // 1. Persistent Setup (Clipboard & Input Sink & Input Source)
-    let (local_tx, mut local_rx) = mpsc::channel::<Frame>(500); // Increased capacity
+    let (local_tx, mut local_rx) = mpsc::channel::<Frame>(1024); // Increased capacity for input buffering
     let (internal_tx, mut internal_rx) = mpsc::channel::<SessionInternalMsg>(100);
     let sink = Arc::new(DefaultInputSink::new());
     let source = Arc::new(DefaultInputSource::new());
@@ -60,7 +60,7 @@ pub async fn run_client_session(
                 } else { true };
 
                 if should_send {
-                     let _ = clip_tx.blocking_send(Frame::Clipboard(ClipboardEvent::Text(text)));
+                     let _ = clip_tx.try_send(Frame::Clipboard(ClipboardEvent::Text(text)));
                 }
                 return;
             }
@@ -77,7 +77,7 @@ pub async fn run_client_session(
             } else { true };
             
             if should_send {
-                 let _ = clip_tx.blocking_send(Frame::Clipboard(ClipboardEvent::Image { data: img_data }));
+                 let _ = clip_tx.try_send(Frame::Clipboard(ClipboardEvent::Image { data: img_data }));
             }
         }
 
@@ -120,8 +120,8 @@ pub async fn run_client_session(
                      } else {
                          let batch_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
                          let manifest = FileManifest { files: file_metas, total_size, batch_id };
-                         let _ = clip_tx.blocking_send(Frame::Clipboard(ClipboardEvent::Files { manifest }));
-                         let _ = internal_tx_clip.blocking_send(SessionInternalMsg::SendClipboardFiles { batch_id, files: files.iter().map(PathBuf::from).collect() });
+                         let _ = clip_tx.try_send(Frame::Clipboard(ClipboardEvent::Files { manifest }));
+                         let _ = internal_tx_clip.try_send(SessionInternalMsg::SendClipboardFiles { batch_id, files: files.iter().map(PathBuf::from).collect() });
                      }
                   }
              }
@@ -173,7 +173,7 @@ pub async fn run_client_session(
 
                 let handshake = Frame::Handshake(Handshake {
                     version: 1,
-                    client_id: "macos-client".to_string(), // TODO: Make dynamic
+                    client_id: format!("{}-client", std::env::consts::OS),
                     capabilities: vec!["input".to_string(), "clipboard".to_string()],
                     screen_info,
                 });
@@ -227,7 +227,8 @@ pub async fn run_client_session(
                                             let req = Frame::FileTransferRequest(platform_passer_core::FileTransferRequest {
                                                 id, filename, file_size, purpose: TransferPurpose::ClipboardSync { batch_id },
                                             });
-                                            let _ = local_tx.send(req).await;
+                                             // Use try_send to avoid deadlock in main loop
+                                             let _ = local_tx.try_send(req);
                                         }
                                     }
                                 }
@@ -355,7 +356,8 @@ pub async fn run_client_session(
                                         let req = Frame::FileTransferRequest(platform_passer_core::FileTransferRequest {
                                             id, filename, file_size, purpose: TransferPurpose::Manual,
                                         });
-                                        let _ = local_tx.send(req).await;
+                                         // Use try_send to avoid deadlock in main loop
+                                         let _ = local_tx.try_send(req);
                                     }
                                 },
                                 SessionCommand::Disconnect => {
