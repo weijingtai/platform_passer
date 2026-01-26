@@ -7,6 +7,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
     MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL,
     KEYEVENTF_KEYUP, VIRTUAL_KEY,
+    KEYEVENTF_EXTENDEDKEY, MapVirtualKeyW, MAPVK_VK_TO_VSC,
 };
 use std::mem::size_of;
 use std::sync::Mutex;
@@ -22,6 +23,15 @@ impl WindowsInputSink {
             last_pos: Mutex::new((0, 0)),
         }
     }
+}
+
+fn is_extended_key(vk: u32) -> bool {
+    matches!(
+        vk,
+        0x21 | 0x22 | 0x23 | 0x24 | 0x25 | 0x26 | 0x27 | 0x28 | 0x2D | 0x2E | // Home, End, Arrows, Insert, Delete, PageUp, PageDown
+        0xA3 | 0xA5 | // Right Control, Right Alt
+        0x6F | 0x90    // Numpad / and Numlock (some versions consider these extended)
+    )
 }
 
 impl InputSink for WindowsInputSink {
@@ -114,13 +124,21 @@ impl InputSink for WindowsInputSink {
             }
             InputEvent::Keyboard { key_code, is_down } => {
                 use windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS;
-                let flags = if is_down { KEYBD_EVENT_FLAGS(0) } else { KEYEVENTF_KEYUP };
+                
+                let mut flags = if is_down { KEYBD_EVENT_FLAGS(0) } else { KEYEVENTF_KEYUP };
+                
+                if is_extended_key(key_code) {
+                    flags |= KEYEVENTF_EXTENDEDKEY;
+                }
+
+                let scan_code = unsafe { MapVirtualKeyW(key_code, MAPVK_VK_TO_VSC) } as u16;
+
                 let input = INPUT {
                     r#type: INPUT_KEYBOARD,
                     Anonymous: INPUT_0 {
                         ki: windows::Win32::UI::Input::KeyboardAndMouse::KEYBDINPUT {
                             wVk: VIRTUAL_KEY(key_code as u16),
-                            wScan: 0,
+                            wScan: scan_code,
                             dwFlags: flags,
                             time: 0,
                             dwExtraInfo: 0,
