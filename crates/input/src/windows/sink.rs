@@ -1,211 +1,141 @@
 use crate::InputSink;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use platform_passer_core::{InputEvent, MouseButton};
-use windows::Win32::UI::Input::KeyboardAndMouse::*;
-// Note: Foundation and WindowsAndMessaging imports removed as they were partially unused or redundant in this context
-
-
-use std::sync::Mutex;
-use platform_passer_core::config::AppConfig;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, 
+    MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_MOVE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+    MOUSEEVENTF_WHEEL, MOUSEEVENTF_HWHEEL,
+    KEYEVENTF_KEYUP, VIRTUAL_KEY,
+};
 use std::mem::size_of;
-use std::collections::HashSet;
+use platform_passer_core::config::AppConfig;
 
-pub struct WindowsInputSink {
-    pressed_keys: Mutex<HashSet<u16>>,
-    pressed_buttons: Mutex<HashSet<u32>>,
-}
+pub struct WindowsInputSink;
 
 impl WindowsInputSink {
     pub fn new() -> Self {
-        Self {
-            pressed_keys: Mutex::new(HashSet::new()),
-            pressed_buttons: Mutex::new(HashSet::new()),
-        }
+        Self
     }
 }
 
 impl InputSink for WindowsInputSink {
     fn inject_event(&self, event: InputEvent) -> Result<()> {
-        let mut input = INPUT::default();
-        
         match event {
-            InputEvent::Keyboard { key_code, is_down } => {
-                input.r#type = INPUT_KEYBOARD;
-                let mut flags = Default::default();
-                if !is_down {
-                    flags |= KEYEVENTF_KEYUP;
-                }
-                
-                let vk = key_code as u16;
-                if let Ok(mut keys) = self.pressed_keys.lock() {
-                    if is_down {
-                        keys.insert(vk);
-                    } else {
-                        keys.remove(&vk);
-                    }
-                }
-
-                input.Anonymous.ki = KEYBDINPUT {
-                    wVk: VIRTUAL_KEY(vk),
-                    wScan: 0,
-                    dwFlags: flags,
-                    time: 0,
-                    dwExtraInfo: 0,
-                };
-            }
             InputEvent::MouseMove { x, y } => {
-                // Mapping 0.0..1.0 to 0..65535 for MOUSEEVENTF_ABSOLUTE
-                // This covers the entire Virtual Screen (primary + secondary monitors)
-                let abs_x = (x * 65535.0) as i32;
-                let abs_y = (y * 65535.0) as i32;
-
-                input.r#type = INPUT_MOUSE;
-                input.Anonymous.mi = MOUSEINPUT {
-                    dx: abs_x,
-                    dy: abs_y,
-                    mouseData: 0,
-                    dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSE_EVENT_FLAGS(0x4000), // VIRTUAL_DESK
-                    time: 0,
-                    dwExtraInfo: 0,
+                let dx = (x * 65535.0) as i32;
+                let dy = (y * 65535.0) as i32;
+                let mut input = INPUT {
+                    r#type: INPUT_MOUSE,
+                    Anonymous: INPUT_0 {
+                        mi: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEINPUT {
+                            dx,
+                            dy,
+                            mouseData: 0,
+                            dwFlags: MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
                 };
+                unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
             }
             InputEvent::MouseButton { button, is_down } => {
-                input.r#type = INPUT_MOUSE;
-                let flags = match (button, is_down) {
-                    (MouseButton::Left, true) => MOUSEEVENTF_LEFTDOWN,
-                    (MouseButton::Left, false) => MOUSEEVENTF_LEFTUP,
-                    (MouseButton::Right, true) => MOUSEEVENTF_RIGHTDOWN,
-                    (MouseButton::Right, false) => MOUSEEVENTF_RIGHTUP,
-                    (MouseButton::Middle, true) => MOUSEEVENTF_MIDDLEDOWN,
-                    (MouseButton::Middle, false) => MOUSEEVENTF_MIDDLEUP,
+                let flags = match button {
+                    MouseButton::Left => if is_down { MOUSEEVENTF_LEFTDOWN } else { MOUSEEVENTF_LEFTUP },
+                    MouseButton::Right => if is_down { MOUSEEVENTF_RIGHTDOWN } else { MOUSEEVENTF_RIGHTUP },
+                    MouseButton::Middle => if is_down { MOUSEEVENTF_MIDDLEDOWN } else { MOUSEEVENTF_MIDDLEUP },
                 };
-
-                // Track button state
-                let btn_flag = match button {
-                    MouseButton::Left => 1, // Custom ID logic
-                    MouseButton::Right => 2,
-                    MouseButton::Middle => 3,
+                let mut input = INPUT {
+                    r#type: INPUT_MOUSE,
+                    Anonymous: INPUT_0 {
+                        mi: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEINPUT {
+                            dx: 0,
+                            dy: 0,
+                            mouseData: 0,
+                            dwFlags: flags,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
                 };
-                
-                if let Ok(mut btns) = self.pressed_buttons.lock() {
-                    if is_down {
-                        btns.insert(btn_flag);
-                    } else {
-                        btns.remove(&btn_flag);
-                    }
-                }
-
-                input.Anonymous.mi = MOUSEINPUT {
-                    dx: 0,
-                    dy: 0,
-                    mouseData: 0,
-                    dwFlags: flags,
-                    time: 0,
-                    dwExtraInfo: 0,
-                };
+                unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
             }
             InputEvent::Scroll { dx, dy } => {
-                
-                // Vertical scroll
-                if dy.abs() > 0.0 {
-                    let mut v_input = INPUT::default();
-                    v_input.r#type = INPUT_MOUSE;
-                    v_input.Anonymous.mi = MOUSEINPUT {
-                        dx: 0,
-                        dy: 0,
-                        mouseData: (dy * 120.0) as i32 as u32, // WHEEL_DELTA = 120, cast to i32 then bit-cast to u32
-                        dwFlags: MOUSEEVENTF_WHEEL,
-                        time: 0,
-                        dwExtraInfo: 0,
+                if dy != 0.0 {
+                    let mut input = INPUT {
+                        r#type: INPUT_MOUSE,
+                        Anonymous: INPUT_0 {
+                            mi: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEINPUT {
+                                dx: 0,
+                                dy: 0,
+                                mouseData: (dy * 120.0) as i32 as u32,
+                                dwFlags: MOUSEEVENTF_WHEEL,
+                                time: 0,
+                                dwExtraInfo: 0,
+                            },
+                        },
                     };
-                    unsafe { SendInput(&[v_input], size_of::<INPUT>() as i32); }
+                    unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
                 }
-
-                // Horizontal scroll
-                if dx.abs() > 0.0 {
-                    let mut h_input = INPUT::default();
-                    h_input.r#type = INPUT_MOUSE;
-                    h_input.Anonymous.mi = MOUSEINPUT {
-                        dx: 0,
-                        dy: 0,
-                        mouseData: (dx * 120.0) as i32 as u32,
-                        dwFlags: MOUSEEVENTF_HWHEEL,
-                        time: 0,
-                        dwExtraInfo: 0,
+                if dx != 0.0 {
+                    let mut input = INPUT {
+                        r#type: INPUT_MOUSE,
+                        Anonymous: INPUT_0 {
+                            mi: windows::Win32::UI::Input::KeyboardAndMouse::MOUSEINPUT {
+                                dx: 0,
+                                dy: 0,
+                                mouseData: (dx * 120.0) as i32 as u32,
+                                dwFlags: MOUSEEVENTF_HWHEEL,
+                                time: 0,
+                                dwExtraInfo: 0,
+                            },
+                        },
                     };
-                    unsafe { SendInput(&[h_input], size_of::<INPUT>() as i32); }
+                    unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
                 }
-                
-                return Ok(());
             }
-            InputEvent::ScreenSwitch(_) => {
-                // Sinks don't handle screen switches directly yet
-                return Ok(());
+            InputEvent::Keyboard { key_code, is_down } => {
+                use windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS;
+                let flags = if is_down { KEYBD_EVENT_FLAGS(0) } else { KEYEVENTF_KEYUP };
+                let mut input = INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: windows::Win32::UI::Input::KeyboardAndMouse::KEYBDINPUT {
+                            wVk: VIRTUAL_KEY(key_code as u16),
+                            wScan: 0,
+                            dwFlags: flags,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                };
+                unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
             }
+            _ => {}
         }
+        Ok(())
+    }
 
-        unsafe {
-            if SendInput(&[input], size_of::<INPUT>() as i32) == 0 {
-                return Err(anyhow!("SendInput failed"));
-            }
-        }
+    fn reset_input(&self) -> Result<()> {
+        // Reset logical state if needed?
+        // Mostly handled by OS, but could explicitly release held keys?
         Ok(())
     }
 
     fn update_config(&self, _config: AppConfig) -> Result<()> {
         Ok(())
     }
-
-    fn reset_input(&self) -> Result<()> {
-        let mut inputs = Vec::new();
-
-        // Release keys
-        if let Ok(mut keys) = self.pressed_keys.lock() {
-            for vk in keys.drain() {
-                let mut input = INPUT::default();
-                input.r#type = INPUT_KEYBOARD;
-                input.Anonymous.ki = KEYBDINPUT {
-                    wVk: VIRTUAL_KEY(vk),
-                    wScan: 0,
-                    dwFlags: KEYEVENTF_KEYUP,
-                    time: 0,
-                    dwExtraInfo: 0,
-                };
-                inputs.push(input);
-            }
-        }
-
-        // Release mouse buttons
-        if let Ok(mut btns) = self.pressed_buttons.lock() {
-            for btn in btns.drain() {
-                let flags = match btn {
-                    1 => MOUSEEVENTF_LEFTUP,
-                    2 => MOUSEEVENTF_RIGHTUP,
-                    3 => MOUSEEVENTF_MIDDLEUP,
-                    _ => continue,
-                };
-                
-                let mut input = INPUT::default();
-                input.r#type = INPUT_MOUSE;
-                input.Anonymous.mi = MOUSEINPUT {
-                    dx: 0,
-                    dy: 0,
-                    mouseData: 0,
-                    dwFlags: flags,
-                    time: 0,
-                    dwExtraInfo: 0,
-                };
-                inputs.push(input);
-            }
-        }
-
-        if !inputs.is_empty() {
-            unsafe {
-                SendInput(&inputs, size_of::<INPUT>() as i32);
-            }
-        }
-
-        Ok(())
-    }
 }
 
+pub fn force_release_modifiers() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{keybd_event, VK_CONTROL, VK_LWIN, VK_MENU, VK_SHIFT, KEYEVENTF_KEYUP, KEYBD_EVENT_FLAGS};
+    unsafe {
+        // Force send KeyUp for common modifiers
+        // 0 = no scan code needed for virtual keys usually in this legacy API, but safe to pass 0
+        keybd_event(VK_CONTROL.0 as u8, 0, KEYBD_EVENT_FLAGS(KEYEVENTF_KEYUP.0), 0);
+        keybd_event(VK_MENU.0 as u8, 0, KEYBD_EVENT_FLAGS(KEYEVENTF_KEYUP.0), 0);
+        keybd_event(VK_SHIFT.0 as u8, 0, KEYBD_EVENT_FLAGS(KEYEVENTF_KEYUP.0), 0);
+        keybd_event(VK_LWIN.0 as u8, 0, KEYBD_EVENT_FLAGS(KEYEVENTF_KEYUP.0), 0);
+    }
+}

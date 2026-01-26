@@ -377,6 +377,17 @@ fn test_notification(app: tauri::AppHandle) -> Result<String, String> {
 
 
 fn main() {
+    // Safety Net: Handle Ctrl+C to unhook and clear modifiers
+    let _ = ctrlc::set_handler(move || {
+        eprintln!("Received Ctrl+C! Cleaning up...");
+        #[cfg(target_os = "windows")]
+        {
+            // Reset modifiers to prevent "sticky key" disaster
+            platform_passer_input::force_release_modifiers();
+        }
+        std::process::exit(0);
+    });
+
     let filter = "debug,quinn=debug,rustls=info"; // Force debug for now to help user
 
     let log_tx = Arc::new(Mutex::new(None));
