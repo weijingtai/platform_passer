@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use std::sync::{Mutex, Once};
 use std::thread;
 use windows::core::{PCWSTR, w};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM, HANDLE, HGLOBAL, HINSTANCE, HMODULE, GlobalFree};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM, HANDLE, HINSTANCE, HMODULE, GlobalFree};
 use windows::Win32::System::DataExchange::{
     OpenClipboard, CloseClipboard, EmptyClipboard, SetClipboardData, GetClipboardData,
     AddClipboardFormatListener, RemoveClipboardFormatListener,
@@ -193,15 +193,16 @@ impl ClipboardProvider for WindowsClipboard {
                 let _ = RegisterClassW(&wc);
             });
 
-            // Create message-only window
+            // Create message-only window (HWND_MESSAGE = -3)
             let title = w!("ClipboardListener");
+            let hwnd_message = HWND(-3isize as isize); 
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 window_class_name,
                 title,
-                WS_OVERLAPPEDWINDOW,
+                windows::Win32::UI::WindowsAndMessaging::WS_POPUP, // Use POPUP instead of OVERLAPPEDWINDOW
                 0, 0, 0, 0,
-                HWND(0),
+                hwnd_message, // Parent = HWND_MESSAGE
                 HMENU(0),
                 h_instance,
                 None,

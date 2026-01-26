@@ -48,3 +48,10 @@ if !is_remote && msg != WM_MOUSEMOVE {
 - **拖拽选择**: 解决了由于 `LeftMouseUp` 丢失导致的拖拽无法结束问题。
 - **系统菜单**: 右键菜单的交互逻辑恢复正常。
 - **稳定性**: 解决了因主循环 `await` 内部消息导致的潜在死锁。
+
+## 5. 最终根因：权限隔离 (UIPI) 与 隐形窗口干扰
+经过深度排查，导致 Windows Desktop 点击失效的最后两个关键拼图是：
+1.  **隐形窗口遮挡**: 剪贴板监听器创了一个 `WS_OVERLAPPEDWINDOW` 样式的 0x0 窗口。在 Windows 桌面层（WorkerW）的点击测试中，这个“幽灵窗口”被误判为遮挡了桌面，导致左键点击（Left Click）无法穿透到桌面图标和菜单。
+    - **修复**: 将其改为 `WS_POPUP` 且父窗口设为 `HWND_MESSAGE`，彻底移出屏幕 Z-order。
+2.  **UIPI (User Interface Privilege Isolation)**: Windows 资源管理器（Explorer.exe）和桌面窗口通常运行在较高的完整性级别（Integrity Level）。如果 `platform-passer` 以普通用户权限运行，安装的底层鼠标钩子（WH_MOUSE_LL）会被系统静默限制，无法拦截或注入针对桌面的事件。
+    - **解决方案**: 必须以 **管理员身份 (Run as Administrator)** 运行程序，或在最终构建时添加 `requireAdministrator` 清单文件。

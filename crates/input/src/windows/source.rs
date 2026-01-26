@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static IS_REMOTE: AtomicBool = AtomicBool::new(false);
 static VIRTUAL_CURSOR_POS: Mutex<Option<(f32, f32)>> = Mutex::new(None);
+static ACTIVE_REMOTE_POS: Mutex<Option<ScreenPosition>> = Mutex::new(None);
 
 // Global callback storage
 type HookCallback = Box<dyn Fn(InputEvent) + Send + Sync>;
@@ -112,6 +113,7 @@ impl InputSource for WindowsInputSource {
             }
         } else {
             *VIRTUAL_CURSOR_POS.lock().unwrap() = None;
+            if let Ok(mut guard) = ACTIVE_REMOTE_POS.lock() { *guard = None; }
             update_metrics();
             let metrics = CACHED_METRICS.lock().unwrap();
             if let Some(m) = &*metrics {
@@ -149,7 +151,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             let kbd = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
             let is_down = wparam.0 as u32 == WM_KEYDOWN || wparam.0 as u32 == WM_SYSKEYDOWN;
             let event = InputEvent::Keyboard { key_code: kbd.vkCode, is_down };
-            if let Ok(guard) = GLOBAL_CALLBACK.try_lock() { // Use try_lock to avoid blocking
+            if let Ok(guard) = GLOBAL_CALLBACK.try_lock() {
                 if let Some(cb) = &*guard {
                     cb(event);
                 }
@@ -168,7 +170,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     let ms = &*(lparam.0 as *const MSLLHOOKSTRUCT);
     let injected = (ms.flags & 0x01) != 0 || (ms.flags & 0x02) != 0;
     
-    // 1. FAST PATH: Ignore all injected events (including ours)
+    // 1. FAST PATH: Ignore all injected events
     if injected {
         return CallNextHookEx(MOUSE_HOOK, code, wparam, lparam);
     }
@@ -176,12 +178,11 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     let is_remote = IS_REMOTE.load(Ordering::Relaxed);
     let msg = wparam.0 as u32;
 
-    // 2. FAST PATH: If not remote and not move, let it pass immediately (fix double-clicks)
+    // 2. FAST PATH: If not remote and not move, let it pass immediately
     if !is_remote && msg != WM_MOUSEMOVE {
         return CallNextHookEx(MOUSE_HOOK, code, wparam, lparam);
     }
 
-    // Capture state for logic below
     let metrics_guard = CACHED_METRICS.try_lock();
     let metrics = if let Ok(ref guard) = metrics_guard { guard.as_ref() } else { None };
 
@@ -199,19 +200,47 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                 if dx != 0 || dy != 0 {
                     if let Ok(mut guard) = VIRTUAL_CURSOR_POS.try_lock() {
                         if let Some((vx, vy)) = *guard {
-                            let mut new_vx = (vx + (dx as f32 / m.width as f32)).max(0.0).min(1.0);
-                            let mut new_vy = (vy + (dy as f32 / m.height as f32)).max(0.0).min(1.0);
+                            let new_vx = (vx + (dx as f32 / m.width as f32)).max(0.0).min(1.0);
+                            let new_vy = (vy + (dy as f32 / m.height as f32)).max(0.0).min(1.0);
                             *guard = Some((new_vx, new_vy));
                             
-                            // Rate limit Move
-                            use std::time::Instant;
-                            static mut LAST_SEND: Option<Instant> = None;
-                            let now = Instant::now();
-                            if LAST_SEND.map_or(true, |l| now.duration_since(l).as_millis() >= 8) {
-                                LAST_SEND = Some(now);
-                                event = Some(InputEvent::MouseMove { x: new_vx, y: new_vy });
+                            // Return to Local Logic (Based on Virtual Cursor)
+                            let mut should_return = false;
+                            if let Ok(pos_guard) = ACTIVE_REMOTE_POS.try_lock() {
+                                if let Some(pos) = &*pos_guard {
+                                    should_return = match pos {
+                                        ScreenPosition::Right => new_vx <= 0.001,
+                                        ScreenPosition::Left => new_vx >= 0.999,
+                                        ScreenPosition::Top => new_vy >= 0.999,
+                                        ScreenPosition::Bottom => new_vy <= 0.001,
+                                    };
+                                }
                             }
-                            let _ = SetCursorPos(center_x, center_y);
+
+                            if should_return {
+                                IS_REMOTE.store(false, Ordering::SeqCst);
+                                swallow = false;
+                                *guard = None;
+                                if let Ok(mut pos_guard) = ACTIVE_REMOTE_POS.try_lock() { *pos_guard = None; }
+                                event = Some(InputEvent::ScreenSwitch(ScreenSide::Local));
+                                // Center the physical cursor on the original edge to avoid immediate re-trigger
+                                let target_x = match ACTIVE_REMOTE_POS.lock().unwrap().clone() {
+                                    Some(ScreenPosition::Right) => m.left + m.width - 50,
+                                    Some(ScreenPosition::Left) => m.left + 50,
+                                    _ => ms.pt.x,
+                                };
+                                let _ = SetCursorPos(target_x, ms.pt.y);
+                            } else {
+                                // Rate limit Move
+                                use std::time::Instant;
+                                static mut LAST_SEND: Option<Instant> = None;
+                                let now = Instant::now();
+                                if LAST_SEND.map_or(true, |l| now.duration_since(l).as_millis() >= 8) {
+                                    LAST_SEND = Some(now);
+                                    event = Some(InputEvent::MouseMove { x: new_vx, y: new_vy });
+                                }
+                                let _ = SetCursorPos(center_x, center_y);
+                            }
                         }
                     }
                 }
@@ -231,26 +260,33 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
         if let Some(m) = metrics {
             let abs_x = (ms.pt.x - m.left) as f32 / m.width as f32;
             let abs_y = (ms.pt.y - m.top) as f32 / m.height as f32;
-            let mut trigger_remote = false;
+            let mut triggered_remote = None;
 
             if let Ok(config_opt) = GLOBAL_CONFIG.try_lock() {
                 if let Some(config) = &*config_opt {
                     for remote in &config.topology.remotes {
-                        match remote.position {
-                            ScreenPosition::Right => if abs_x >= 0.999 { trigger_remote = true; },
-                            ScreenPosition::Left => if abs_x <= 0.001 { trigger_remote = true; },
-                            ScreenPosition::Top => if abs_y <= 0.001 { trigger_remote = true; },
-                            ScreenPosition::Bottom => if abs_y >= 0.999 { trigger_remote = true; },
+                        let hit = match remote.position {
+                            ScreenPosition::Right => abs_x >= 0.999,
+                            ScreenPosition::Left => abs_x <= 0.001,
+                            ScreenPosition::Top => abs_y <= 0.001,
+                            ScreenPosition::Bottom => abs_y >= 0.999,
+                        };
+                        if hit {
+                            triggered_remote = Some(remote.position.clone());
+                            break;
                         }
                     }
                 }
             }
 
-            if trigger_remote {
+            if let Some(pos) = triggered_remote {
                 IS_REMOTE.store(true, Ordering::SeqCst);
                 swallow = true;
                 if let Ok(mut v_guard) = VIRTUAL_CURSOR_POS.try_lock() {
                     *v_guard = Some((abs_x, abs_y));
+                }
+                if let Ok(mut pos_guard) = ACTIVE_REMOTE_POS.try_lock() {
+                    *pos_guard = Some(pos);
                 }
                 let center_x = m.left + m.width / 2;
                 let center_y = m.top + m.height / 2;
