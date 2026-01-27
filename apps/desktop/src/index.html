@@ -108,6 +108,11 @@
           Sync Images (High Bandwidth)
         </label>
         <label class="checkbox-container">
+          <input type="checkbox" id="reverse-scroll" onchange="updateConfigValue('reverse_scroll', this.checked)">
+          <span class="checkmark"></span>
+          Reverse Scroll Direction (macOS)
+        </label>
+        <label class="checkbox-container">
           <input type="checkbox" id="notifications-enabled" onchange="toggleNotifications(this.checked)" checked>
           <span class="checkmark"></span>
           Enable Notifications
@@ -135,7 +140,7 @@
 
     let currentConfig = {
       topology: { local: { width: 1920, height: 1080, dpi_scale: 1.0 }, remotes: [] },
-      input: { cursor_speed_multiplier: 1.0, maintain_aspect_ratio: true },
+      input: { cursor_speed_multiplier: 1.0, maintain_aspect_ratio: true, scroll_reverse: false },
       clipboard: { sync_enabled: true, sync_images: false },
       notifications_enabled: true,
       last_server_ip: "127.0.0.1",
@@ -257,6 +262,7 @@
       }
       if (key === 'clipboard') currentConfig.clipboard.sync_enabled = value;
       if (key === 'images') currentConfig.clipboard.sync_images = value;
+      if (key === 'reverse_scroll') currentConfig.input.scroll_reverse = value;
       if (key === 'notifications') currentConfig.notifications_enabled = value;
     }
 
@@ -310,6 +316,7 @@
           if (document.getElementById('speed-val')) document.getElementById('speed-val').innerText = config.input.cursor_speed_multiplier + 'x';
           if (document.getElementById('sync-clipboard')) document.getElementById('sync-clipboard').checked = config.clipboard.sync_enabled;
           if (document.getElementById('sync-images')) document.getElementById('sync-images').checked = config.clipboard.sync_images;
+          if (document.getElementById('reverse-scroll')) document.getElementById('reverse-scroll').checked = config.input.scroll_reverse;
           if (document.getElementById('enable-notifications')) document.getElementById('enable-notifications').checked = config.notifications_enabled;
 
           if (document.getElementById('server-ip')) document.getElementById('server-ip').value = config.last_server_ip || "127.0.0.1";

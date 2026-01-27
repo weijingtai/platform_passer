@@ -12,6 +12,7 @@ use platform_passer_core::config::AppConfig;
 pub struct MacosInputSink {
     last_pos: Mutex<CGPoint>,
     scroll_multiplier: Mutex<f32>,
+    scroll_reverse: Mutex<bool>,
     pressed_keys: Mutex<HashSet<u16>>,
     pressed_buttons: Mutex<HashSet<u32>>,
 }
@@ -21,6 +22,7 @@ impl MacosInputSink {
         Self {
             last_pos: Mutex::new(CGPoint::new(0.0, 0.0)),
             scroll_multiplier: Mutex::new(1.0),
+            scroll_reverse: Mutex::new(false),
             pressed_keys: Mutex::new(HashSet::new()),
             pressed_buttons: Mutex::new(HashSet::new()),
         }
@@ -138,7 +140,9 @@ impl InputSink for MacosInputSink {
                         1, // wheel count
                         {
                             let mult = if let Ok(guard) = self.scroll_multiplier.lock() { *guard } else { 1.0 };
-                            (dy as f32 * mult) as i32
+                            let reverse = if let Ok(guard) = self.scroll_reverse.lock() { *guard } else { false };
+                            let dy_val = if reverse { -dy } else { dy };
+                            (dy_val as f32 * mult) as i32
                         },
                         0,
                         0,
@@ -160,6 +164,9 @@ impl InputSink for MacosInputSink {
     fn update_config(&self, config: AppConfig) -> Result<()> {
         if let Ok(mut guard) = self.scroll_multiplier.lock() {
             *guard = config.input.scroll_speed_multiplier;
+        }
+        if let Ok(mut guard) = self.scroll_reverse.lock() {
+            *guard = config.input.scroll_reverse;
         }
         Ok(())
     }

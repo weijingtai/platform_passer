@@ -80,6 +80,7 @@ pub struct InputConfig {
     pub cursor_speed_multiplier: f32,
     pub scroll_speed_multiplier: f32,
     pub maintain_aspect_ratio: bool,
+    pub scroll_reverse: bool,
 }
 
 impl Default for InputConfig {
@@ -88,6 +89,7 @@ impl Default for InputConfig {
             cursor_speed_multiplier: 1.0,
             scroll_speed_multiplier: 1.0,
             maintain_aspect_ratio: true,
+            scroll_reverse: false,
         }
     }
 }

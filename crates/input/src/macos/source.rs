@@ -28,6 +28,7 @@ static VIRTUAL_CURSOR: Mutex<(f32, f32)> = Mutex::new((0.0, 0.0));
 static DISPLAY_CACHE: Mutex<Option<(f32, f32)>> = Mutex::new(None);
 static TOPOLOGY: Mutex<Option<Topology>> = Mutex::new(None);
 static ACTIVE_REMOTE_POS: Mutex<Option<ScreenPosition>> = Mutex::new(None);
+static SCROLL_REVERSE: AtomicBool = AtomicBool::new(false);
 
 pub struct MacosInputSource {
     run_loop: Arc<Mutex<Option<CFRunLoop>>>,
@@ -191,23 +192,25 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                  let mut checked = false;
                  if let Ok(guard) = TOPOLOGY.lock() {
                      if let Some(topo) = &*guard {
-                         checked = true;
-                         for remote in &topo.remotes {
-                             let hit = match remote.position {
-                                 ScreenPosition::Left => abs_x <= 0.002,
-                                 ScreenPosition::Right => abs_x >= 0.998,
-                                 ScreenPosition::Top => abs_y <= 0.002,
-                                 ScreenPosition::Bottom => abs_y >= 0.998,
-                             };
-                             if hit {
-                                 triggered_remote = Some(remote.clone());
-                                 break;
-                             }
+                         if !topo.remotes.is_empty() {
+                            checked = true;
+                            for remote in &topo.remotes {
+                                let hit = match remote.position {
+                                    ScreenPosition::Left => abs_x <= 0.002,
+                                    ScreenPosition::Right => abs_x >= 0.998,
+                                    ScreenPosition::Top => abs_y <= 0.002,
+                                    ScreenPosition::Bottom => abs_y >= 0.998,
+                                };
+                                if hit {
+                                    triggered_remote = Some(remote.clone());
+                                    break;
+                                }
+                            }
                          }
                      }
                  }
                  
-                 // Fallback: Default Left Edge if config missing
+                 // Fallback: Default Left Edge if config missing or remotes empty
                  if !checked && abs_x <= 0.002 {
                      // create dummy remote for fallback
                      // This is tricky without a real object, but we just set IS_REMOTE.
@@ -381,7 +384,11 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
             // kCGScrollWheelEventDeltaAxis2 = 12 (Horizontal, X)
             let dy = event.get_integer_value_field(11); 
             let dx = event.get_integer_value_field(12);
-            Some(InputEvent::Scroll { dx: dx as f32, dy: dy as f32 })
+            
+            let reverse = SCROLL_REVERSE.load(Ordering::SeqCst);
+            let dy_val = if reverse { -dy } else { dy };
+
+            Some(InputEvent::Scroll { dx: dx as f32, dy: dy_val as f32 })
         }
         _ => None,
     }
@@ -580,6 +587,7 @@ impl InputSource for MacosInputSource {
 
     fn update_config(&self, config: AppConfig) -> Result<()> {
         MacosInputSource::update_topology(config.topology);
+        SCROLL_REVERSE.store(config.input.scroll_reverse, Ordering::SeqCst);
         Ok(())
     }
 }
