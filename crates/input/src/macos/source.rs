@@ -158,7 +158,7 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 let delta_y = event.get_double_value_field(5) as f32; // kCGMouseEventDeltaY = 5
                 
                 let mut ignore_delta = false;
-                if delta_x.abs() > 50.0 || delta_y.abs() > 50.0 {
+                if delta_x.abs() > 1000.0 || delta_y.abs() > 1000.0 {
                      ignore_delta = true;
                 }
 
