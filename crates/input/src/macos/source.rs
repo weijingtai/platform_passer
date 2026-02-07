@@ -29,6 +29,7 @@ static DISPLAY_CACHE: Mutex<Option<(f32, f32)>> = Mutex::new(None);
 static TOPOLOGY: Mutex<Option<Topology>> = Mutex::new(None);
 static ACTIVE_REMOTE_POS: Mutex<Option<ScreenPosition>> = Mutex::new(None);
 static SCROLL_REVERSE: AtomicBool = AtomicBool::new(false);
+static DELTA_THRESHOLD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(100); // Stores threshold as u32 bits
 
 pub struct MacosInputSource {
     run_loop: Arc<Mutex<Option<CFRunLoop>>>,
@@ -157,8 +158,9 @@ fn handle_event(etype: CGEventType, event: &CGEvent) -> Option<InputEvent> {
                 let delta_x = event.get_double_value_field(4) as f32; // kCGMouseEventDeltaX = 4
                 let delta_y = event.get_double_value_field(5) as f32; // kCGMouseEventDeltaY = 5
                 
+                let threshold = DELTA_THRESHOLD.load(Ordering::SeqCst) as f32;
                 let mut ignore_delta = false;
-                if delta_x.abs() > 1000.0 || delta_y.abs() > 1000.0 {
+                if delta_x.abs() > threshold || delta_y.abs() > threshold {
                      ignore_delta = true;
                 }
 
@@ -588,6 +590,14 @@ impl InputSource for MacosInputSource {
     fn update_config(&self, config: AppConfig) -> Result<()> {
         MacosInputSource::update_topology(config.topology);
         SCROLL_REVERSE.store(config.input.scroll_reverse, Ordering::SeqCst);
+        
+        // Clamp delta threshold to MAX_DELTA_THRESHOLD (500) to prevent catastrophic errors
+        let clamped_threshold = config.input.mouse_delta_threshold
+            .min(platform_passer_core::config::MAX_DELTA_THRESHOLD)
+            .max(1.0); // Minimum 1 to avoid filtering nothing
+        DELTA_THRESHOLD.store(clamped_threshold as u32, Ordering::SeqCst);
+        tracing::debug!("InputSource: Delta threshold set to {}", clamped_threshold);
+        
         Ok(())
     }
 }

@@ -95,11 +95,11 @@
           <span id="speed-val">1.0x</span>
         </div>
 
-        <label style="margin-top: 1rem;">Mouse Speed Threshold</label>
+        <label style="margin-top: 1rem;">Mouse Delta Threshold (max 500)</label>
         <div style="display: flex; align-items: center; gap: 1rem;">
-          <input type="number" id="mouse-threshold" min="1" max="5000" value="50" style="width: 80px;"
-            onchange="updateConfigValue('threshold', this.value)">
-          <span style="font-size: 0.8rem; color: var(--text-secondary);">Higher = Less filtering</span>
+          <input type="number" id="mouse-threshold" min="1" max="500" value="100" style="width: 80px;"
+            onchange="updateConfigValue('threshold', Math.min(500, parseInt(this.value) || 100))">
+          <span style="font-size: 0.8rem; color: var(--text-secondary);">Filters large deltas; max 500</span>
         </div>
 
         <label class="checkbox-container" style="margin-top: 0.5rem;">
@@ -153,7 +153,7 @@
 
     let currentConfig = {
       topology: { local: { width: 1920, height: 1080, dpi_scale: 1.0 }, remotes: [] },
-      input: { cursor_speed_multiplier: 1.0, maintain_aspect_ratio: true, scroll_reverse: false, mouse_speed_threshold: 50, limit_max_speed: false },
+      input: { cursor_speed_multiplier: 1.0, maintain_aspect_ratio: true, scroll_reverse: false, mouse_delta_threshold: 100, limit_max_speed: false },
       clipboard: { sync_enabled: true, sync_images: false },
       notifications_enabled: true,
       last_server_ip: "127.0.0.1",
@@ -273,7 +273,7 @@
         const el = document.getElementById('speed-val');
         if (el) el.innerText = value + 'x';
       }
-      if (key === 'threshold') currentConfig.input.mouse_speed_threshold = parseInt(value) || 50;
+      if (key === 'threshold') currentConfig.input.mouse_delta_threshold = Math.min(500, parseInt(value) || 100);
       if (key === 'limit') currentConfig.input.limit_max_speed = value;
       if (key === 'clipboard') currentConfig.clipboard.sync_enabled = value;
       if (key === 'images') currentConfig.clipboard.sync_images = value;
@@ -311,7 +311,7 @@
         const settingsView = document.getElementById('settings-view');
         if (settingsView && !settingsView.classList.contains('hidden')) {
           const remotes = [];
-          document.querySelectorAll('.drop-zone.active').forEach(zone => {
+          document.querrAll('.drop-zone.active').forEach(zone => {
             const posStr = zone.getAttribute('data-pos');
             remotes.push({
               id: "remote-" + posStr.toLowerCase(),
@@ -350,7 +350,7 @@
           // Update UI
           if (document.getElementById('cursor-speed')) document.getElementById('cursor-speed').value = config.input.cursor_speed_multiplier;
           if (document.getElementById('speed-val')) document.getElementById('speed-val').innerText = config.input.cursor_speed_multiplier + 'x';
-          if (document.getElementById('mouse-threshold')) document.getElementById('mouse-threshold').value = config.input.mouse_speed_threshold || 50;
+          if (document.getElementById('mouse-threshold')) document.getElementById('mouse-threshold').value = Math.min(500, config.input.mouse_delta_threshold || 100);
           if (document.getElementById('limit-speed')) document.getElementById('limit-speed').checked = config.input.limit_max_speed || false;
           if (document.getElementById('sync-clipboard')) document.getElementById('sync-clipboard').checked = config.clipboard.sync_enabled;
           if (document.getElementById('sync-images')) document.getElementById('sync-images').checked = config.clipboard.sync_images;

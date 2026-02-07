@@ -75,12 +75,22 @@ pub enum ScreenPosition {
     // Absolute { x: i32, y: i32 } could be added later
 }
 
+/// Maximum allowed delta threshold to prevent catastrophic errors
+pub const MAX_DELTA_THRESHOLD: f32 = 500.0;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InputConfig {
     pub cursor_speed_multiplier: f32,
     pub scroll_speed_multiplier: f32,
     pub maintain_aspect_ratio: bool,
     pub scroll_reverse: bool,
+    /// Delta threshold for filtering abnormal mouse movements (max 500)
+    #[serde(default = "default_delta_threshold")]
+    pub mouse_delta_threshold: f32,
+}
+
+fn default_delta_threshold() -> f32 {
+    100.0
 }
 
 impl Default for InputConfig {
@@ -90,6 +100,7 @@ impl Default for InputConfig {
             scroll_speed_multiplier: 1.0,
             maintain_aspect_ratio: true,
             scroll_reverse: false,
+            mouse_delta_threshold: 100.0,
         }
     }
 }
