@@ -78,13 +78,13 @@
       </p>
 
       <div class="topology-container" id="topology-editor">
-        <div class="drop-zone" data-pos="Top"></div>
+        <div class="drop-zone" data-pos="Top" onclick="toggleRemote(this)"></div>
         <div class="middle-row">
-          <div class="drop-zone" data-pos="Left"></div>
+          <div class="drop-zone" data-pos="Left" onclick="toggleRemote(this)"></div>
           <div class="screen-box local">This PC</div>
-          <div class="drop-zone" data-pos="Right"></div>
+          <div class="drop-zone" data-pos="Right" onclick="toggleRemote(this)"></div>
         </div>
-        <div class="drop-zone" data-pos="Bottom"></div>
+        <div class="drop-zone" data-pos="Bottom" onclick="toggleRemote(this)"></div>
       </div>
 
       <div class="settings-group">
@@ -94,6 +94,19 @@
             onchange="updateConfigValue('speed', this.value)">
           <span id="speed-val">1.0x</span>
         </div>
+
+        <label style="margin-top: 1rem;">Mouse Speed Threshold</label>
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <input type="number" id="mouse-threshold" min="1" max="5000" value="50" style="width: 80px;"
+            onchange="updateConfigValue('threshold', this.value)">
+          <span style="font-size: 0.8rem; color: var(--text-secondary);">Higher = Less filtering</span>
+        </div>
+
+        <label class="checkbox-container" style="margin-top: 0.5rem;">
+          <input type="checkbox" id="limit-speed" onchange="updateConfigValue('limit', this.checked)">
+          <span class="checkmark"></span>
+          Limit speed if exceeded (Smooth)
+        </label>
       </div>
 
       <div class="settings-group">
@@ -140,7 +153,7 @@
 
     let currentConfig = {
       topology: { local: { width: 1920, height: 1080, dpi_scale: 1.0 }, remotes: [] },
-      input: { cursor_speed_multiplier: 1.0, maintain_aspect_ratio: true, scroll_reverse: false },
+      input: { cursor_speed_multiplier: 1.0, maintain_aspect_ratio: true, scroll_reverse: false, mouse_speed_threshold: 50, limit_max_speed: false },
       clipboard: { sync_enabled: true, sync_images: false },
       notifications_enabled: true,
       last_server_ip: "127.0.0.1",
@@ -260,10 +273,17 @@
         const el = document.getElementById('speed-val');
         if (el) el.innerText = value + 'x';
       }
+      if (key === 'threshold') currentConfig.input.mouse_speed_threshold = parseInt(value) || 50;
+      if (key === 'limit') currentConfig.input.limit_max_speed = value;
       if (key === 'clipboard') currentConfig.clipboard.sync_enabled = value;
       if (key === 'images') currentConfig.clipboard.sync_images = value;
       if (key === 'reverse_scroll') currentConfig.input.scroll_reverse = value;
       if (key === 'notifications') currentConfig.notifications_enabled = value;
+    }
+
+    function toggleNotifications(enabled) {
+      currentConfig.notifications_enabled = enabled;
+      saveCurrentConfig();
     }
 
     async function testNotification() {
@@ -286,16 +306,22 @@
         return;
       }
       try {
-        const remotes = [];
-        document.querySelectorAll('.drop-zone.active').forEach(zone => {
-          const posStr = zone.getAttribute('data-pos');
-          remotes.push({
-            id: "remote-1",
-            position: posStr,
-            info: { width: 1920, height: 1080, dpi_scale: 1.0 }
+        // Only update topology from DOM if the editor is visible/active
+        // ENABLED: The topology editor is now interactive!
+        const settingsView = document.getElementById('settings-view');
+        if (settingsView && !settingsView.classList.contains('hidden')) {
+          const remotes = [];
+          document.querySelectorAll('.drop-zone.active').forEach(zone => {
+            const posStr = zone.getAttribute('data-pos');
+            remotes.push({
+              id: "remote-" + posStr.toLowerCase(),
+              position: posStr,
+              info: { width: 1920, height: 1080, dpi_scale: 1.0 }
+            });
           });
-        });
-        currentConfig.topology.remotes = remotes;
+          currentConfig.topology.remotes = remotes;
+        }
+
         await invoke('save_config', { config: currentConfig });
         log("Configuration saved!");
       } catch (e) {
@@ -304,27 +330,51 @@
       }
     }
 
+    // Toggle logic for drop zones
+    function toggleRemote(element) {
+      element.classList.toggle('active');
+      if (element.classList.contains('active')) {
+        element.innerText = "Remote";
+      } else {
+        element.innerText = "";
+      }
+      // Trigger save immediately to reflect changes
+      saveCurrentConfig();
+    }
+
     async function loadConfig() {
       if (!invoke) return;
       try {
         const config = await invoke('get_config');
         if (config) {
-          currentConfig = config;
-
           // Update UI
           if (document.getElementById('cursor-speed')) document.getElementById('cursor-speed').value = config.input.cursor_speed_multiplier;
           if (document.getElementById('speed-val')) document.getElementById('speed-val').innerText = config.input.cursor_speed_multiplier + 'x';
+          if (document.getElementById('mouse-threshold')) document.getElementById('mouse-threshold').value = config.input.mouse_speed_threshold || 50;
+          if (document.getElementById('limit-speed')) document.getElementById('limit-speed').checked = config.input.limit_max_speed || false;
           if (document.getElementById('sync-clipboard')) document.getElementById('sync-clipboard').checked = config.clipboard.sync_enabled;
           if (document.getElementById('sync-images')) document.getElementById('sync-images').checked = config.clipboard.sync_images;
           if (document.getElementById('reverse-scroll')) document.getElementById('reverse-scroll').checked = config.input.scroll_reverse;
-          if (document.getElementById('enable-notifications')) document.getElementById('enable-notifications').checked = config.notifications_enabled;
+          if (document.getElementById('notifications-enabled')) document.getElementById('notifications-enabled').checked = config.notifications_enabled;
 
           if (document.getElementById('server-ip')) document.getElementById('server-ip').value = config.last_server_ip || "127.0.0.1";
           if (document.getElementById('server-port')) document.getElementById('server-port').value = config.last_server_port || 4433;
           if (document.getElementById('bind-ip')) document.getElementById('bind-ip').value = config.last_bind_ip || "0.0.0.0";
           if (document.getElementById('bind-port')) document.getElementById('bind-port').value = config.last_bind_port || 4433;
 
-          renderTopology(config.topology);
+          // Only update topology if backend has remotes, otherwise keep local (or default)
+          if (config.topology && config.topology.remotes && config.topology.remotes.length > 0) {
+            renderTopology(config.topology);
+          } else if (currentConfig.topology && currentConfig.topology.remotes && currentConfig.topology.remotes.length > 0) {
+            // Keep current topology
+            config.topology = currentConfig.topology; // Update the config object to reflect preservation
+            renderTopology(currentConfig.topology);
+            console.log("GUI: Preserved existing topology during load (backend returned empty)");
+          } else {
+            // Both are empty/invalid, render whatever we got
+            renderTopology(config.topology);
+          }
+          currentConfig = config; // NOW update global state
         }
       } catch (e) {
         console.error("Config Load Error:", e);
@@ -347,7 +397,10 @@
       const target = document.getElementById(tab + '-view');
       if (target) target.classList.remove('hidden');
 
-      if (tab === 'settings') loadConfig();
+      if (tab === 'settings') {
+        log("Switching to Settings tab...");
+        await loadConfig();
+      }
       if (tab === 'server' && invoke) {
         try {
           const isTrusted = await invoke('check_accessibility');
@@ -358,7 +411,11 @@
 
       if (currentConfig.last_mode !== tab) {
         currentConfig.last_mode = tab;
-        saveCurrentConfig();
+        // Don't save full config just for mode switch, it's risky.
+        // But we need to persist mode? Let's rely on saveCurrentConfig only when explicit action taken?
+        // NO, we need to save. But let's log it.
+        log("Saving config due to tab switch: " + tab);
+        await saveCurrentConfig();
       }
     }
 
